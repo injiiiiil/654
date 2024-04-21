@@ -290,6 +290,7 @@ def while_loop(cond_fn, body_fn, carried_inputs):
     # parameters and buffers accessed in cond_fn or body_fn or tensor closures will become additional_inputs.
     additional_inputs: Tuple = tuple()
     
+    #TODO: Automatically create the backward function from the body_fn
     outs = body_fn(*carried_inputs)
     # def body_grad_fn(grads):
     #     return tuple([v.grad_fn(g) if isinstance(v, torch.Tensor) and v.requires_grad else None for g, v in zip(grads, outs)])
@@ -315,17 +316,14 @@ def while_loop(cond_fn, body_fn, carried_inputs):
 
     with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
         return torch.compile(while_loop_op, backend="eager", fullgraph=True)(
-            cond_fn, body_fn, body_grad_fn, (torch.tensor(0),), carried_inputs, additional_inputs
+            cond_fn, body_fn, body_grad_fn, carried_inputs, carried_inputs, additional_inputs
         )
 
 
 @while_loop_op.py_impl(DispatchKey.CompositeExplicitAutograd)
 def while_loop_dense(cond_fn, body_fn, body_grad_fn, fw_bw, carried_inputs, additional_inputs):
     carried_vals = carried_inputs
-    # if fw_bw[0] == 0:
-    #     outs = body_fn(*carried_inputs, *additional_inputs)
-    # else:
-    #     outs = body_grad_fn(*carried_inputs, *additional_inputs)
+    outs = [torch.unsqueeze(c, 0) for c in carried_inputs]
 
     def _is_boolean_scalar_tensor(pred):
         return (
@@ -352,61 +350,53 @@ def while_loop_dense(cond_fn, body_fn, body_grad_fn, fw_bw, carried_inputs, addi
             carried_inputs
         ), "body_fn should return the same number of elements as carried_inputs"
         carried_vals = out
-    return carried_vals
+        
+        for ind in range(len(carried_vals)):
+            outs[ind] = torch.concatenate([outs[ind], torch.unsqueeze(carried_vals[ind], 0)])
+
+    # return carried_vals
+    return tuple(outs)
 
 class WhileLoopAutogradOp(torch.autograd.Function):
     @staticmethod
     def forward(ctx, cond_graph, fw_graph, joint_graph, num_mapped_args, *flat_args):
-        ctx.save_for_backward(*flat_args)
         ctx._fw_bw = (torch.tensor(1),)
         ctx._cond_graph = cond_graph
         ctx._fw_graph = fw_graph
         ctx._joint_graph = joint_graph
         ctx._num_mapped_args = num_mapped_args
         with torch._C._AutoDispatchBelowAutograd():
-            # vals = while_loop_op(cond_graph, fw_graph, flat_args[:num_mapped_args], flat_args[num_mapped_args:])
-            # return (
-            #     *while_loop_op(
-            #         cond_graph, fw_graph, flat_args[:num_mapped_args], flat_args[num_mapped_args:]
-            #     ),
-            # )
-            with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
-                return torch.compile(while_loop_op, backend="eager", fullgraph=True)(
-                    cond_graph, fw_graph, joint_graph, (torch.tensor(0),), flat_args[:num_mapped_args], flat_args[num_mapped_args:]
-                )
+            # with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
+            #     res = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
+            #         cond_graph, fw_graph, joint_graph, flat_args[:num_mapped_args], flat_args[:num_mapped_args], flat_args[num_mapped_args:]
+            #     )
+            res = while_loop_op(cond_graph, fw_graph, joint_graph, flat_args[:num_mapped_args], flat_args[:num_mapped_args], flat_args[num_mapped_args:])
+            ctx.save_for_backward(*(list(res) + list(flat_args)))
+            return tuple([r[-1] for r in res])
 
     @staticmethod
     def backward(ctx, *flat_grads):
         fw_args = ctx.saved_tensors
-        fw_mapped_args = fw_args[:ctx._num_mapped_args]
-        pos_args = fw_args[ctx._num_mapped_args :]
+        full_res = fw_args[:ctx._num_mapped_args]
+        fw_mapped_args = fw_args[ctx._num_mapped_args:2*ctx._num_mapped_args]
+        pos_args = fw_args[2*ctx._num_mapped_args:]
 
-        # grads = while_loop_op(
-        #     ctx._cond_graph,
-        #     ctx._joint_graph,
-        #     fw_mapped_args + flat_grads,
-        #     pos_args,
-        # )
-        # grads = while_loop_op(
-        #     ctx._cond_graph,
-        #     ctx._fw_graph,
-        #     ctx._joint_graph,
-        #     flat_grads,
-        #     flat_grads,
-        #     pos_args,
-        # )
-        with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
-            grads = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
-                ctx._cond_graph, ctx._fw_graph, ctx._joint_graph, (torch.tensor(1),), flat_grads, pos_args
-            )
-        return None, None, None, *grads
+        #TODO: call the while_loop_op in the backward mode with the 
+        # with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
+        #     grads = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
+        #         ctx._cond_graph, ctx._fw_graph, ctx._joint_graph, full_res, fw_mapped_args, pos_args
+        #     )
+        grads = while_loop_op(ctx._cond_graph, ctx._fw_graph, ctx._joint_graph, full_res, fw_mapped_args, pos_args)
+        
+        #multiply body gradients with incoming upstream gradients
+        gs = tuple([g * gu for g, gu in zip(grads, flat_grads)])
+        return None, None, None, *(gs)
 
 @while_loop_op.py_impl(DispatchKey.Autograd)
 def while_loop_autograd(cond_fn, body_fn, body_grad_fn, fw_bw, xs, pos_args):
     num_mapped_args = len(xs)
     
     fw_graph, cond_graph, bw_graph = create_fw_bw_graph(cond_fn, body_fn, body_grad_fn, num_mapped_args, *xs, *pos_args)
-    # fw_graph, cond_graph, bw_graph = create_fw_bw_graph(cond_fn, body_fn, num_mapped_args, *xs, *pos_args)
     flat_out = WhileLoopAutogradOp.apply(cond_graph, fw_graph, bw_graph, num_mapped_args, *xs, *pos_args)
     return flat_out
 
