@@ -793,9 +793,9 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
                 f"Expected a tuple but got {args[3].python_type()}",
             )
         fw_bw = args[3].unpack_var_sequence(tx)
-        if not only_consist_of(args[3], (ConstantVariable, TensorVariable,)):
+        if not only_consist_of(args[3], (TensorVariable,)):
             unimplemented(
-                "Expect operands to be a tuple of pytrees that only consists of tensor leaves or constant leaves."
+                "Expect operands to be a tuple of pytrees that only consists of tensor leaves."
             )
 
         # operands

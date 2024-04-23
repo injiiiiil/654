@@ -286,7 +286,8 @@ class TestControlFlow(TestCase):
             return x.sum() < 10
 
         def body_fn(x):
-            return (x + 1,)
+            # return (x + 1,)
+            return (x * 2 + 1,)
         
         x = torch.zeros(1, requires_grad=True)
         res = while_loop(cond_fn, body_fn, (x,))

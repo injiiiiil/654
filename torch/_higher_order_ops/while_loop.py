@@ -291,11 +291,12 @@ def while_loop(cond_fn, body_fn, carried_inputs):
     additional_inputs: Tuple = tuple()
     
     #TODO: Automatically create the backward function from the body_fn
+    #Currently this function is hardcoded
     outs = body_fn(*carried_inputs)
     # def body_grad_fn(grads):
     #     return tuple([v.grad_fn(g) if isinstance(v, torch.Tensor) and v.requires_grad else None for g, v in zip(grads, outs)])
     def body_grad_fn(grads):
-        return (grads+27,)#tuple([g+1 for g in grads])
+        return (torch.ones_like(grads) * 2,)
     
     if torch.compiler.is_dynamo_compiling():
         return while_loop_op(cond_fn, body_fn, body_grad_fn, (torch.tensor(0),), carried_inputs, additional_inputs)
@@ -322,8 +323,15 @@ def while_loop(cond_fn, body_fn, carried_inputs):
 
 @while_loop_op.py_impl(DispatchKey.CompositeExplicitAutograd)
 def while_loop_dense(cond_fn, body_fn, body_grad_fn, fw_bw, carried_inputs, additional_inputs):
-    carried_vals = carried_inputs
-    outs = [torch.unsqueeze(c, 0) for c in carried_inputs]
+    # carried_vals = carried_inputs
+    fb = True if len(carried_inputs[0].shape) == 1 else False
+    if fb:
+        carried_vals = carried_inputs
+        outs = [torch.unsqueeze(c, 0) for c in carried_vals]
+    else:
+        carried_vals = tuple([c[0] for c in carried_inputs])
+        outs = []
+    # outs = [torch.unsqueeze(c, 0) for c in carried_vals]
 
     def _is_boolean_scalar_tensor(pred):
         return (
@@ -337,22 +345,35 @@ def while_loop_dense(cond_fn, body_fn, body_grad_fn, fw_bw, carried_inputs, addi
             f"carried_inputs must be a tuple but got {type(carried_inputs)}"
         )
 
+    ind = 0
     while pred := cond_fn(*carried_vals, *additional_inputs):
         if not _is_boolean_scalar_tensor(pred):
             raise RuntimeError(
                 f"cond_fn must return a boolean scalar tensor but got {pred}"
             )
-        out = body_fn(*carried_vals, *additional_inputs)
+        if fb:
+            out = body_fn(*carried_vals, *additional_inputs)
+        else:
+            out = body_grad_fn(*carried_vals, *additional_inputs)
         assert isinstance(
             out, tuple
         ), f"body_fn should return a tuple but got {type(out)}"
         assert len(out) == len(
             carried_inputs
         ), "body_fn should return the same number of elements as carried_inputs"
-        carried_vals = out
         
-        for ind in range(len(carried_vals)):
-            outs[ind] = torch.concatenate([outs[ind], torch.unsqueeze(carried_vals[ind], 0)])
+        if fb:
+            carried_vals = out
+            for i in range(len(carried_vals)):
+                outs[i] = torch.concatenate([outs[i], torch.unsqueeze(carried_vals[i], 0)])
+        else:
+            for i in range(len(carried_vals)):
+                if ind == 0:
+                    outs.append(torch.unsqueeze(out[i], 0))
+                else:
+                    outs[i] = torch.concatenate([outs[i], torch.unsqueeze(out[i], 0)])
+            ind += 1
+            carried_vals = tuple([c[ind] for c in carried_inputs])
 
     # return carried_vals
     return tuple(outs)
@@ -366,11 +387,11 @@ class WhileLoopAutogradOp(torch.autograd.Function):
         ctx._joint_graph = joint_graph
         ctx._num_mapped_args = num_mapped_args
         with torch._C._AutoDispatchBelowAutograd():
-            # with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
-            #     res = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
-            #         cond_graph, fw_graph, joint_graph, flat_args[:num_mapped_args], flat_args[:num_mapped_args], flat_args[num_mapped_args:]
-            #     )
-            res = while_loop_op(cond_graph, fw_graph, joint_graph, flat_args[:num_mapped_args], flat_args[:num_mapped_args], flat_args[num_mapped_args:])
+            with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
+                res = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
+                    cond_graph, fw_graph, joint_graph, flat_args[:num_mapped_args], flat_args[:num_mapped_args], flat_args[num_mapped_args:]
+                )
+            # res = while_loop_op(cond_graph, fw_graph, joint_graph, flat_args[:num_mapped_args], flat_args[:num_mapped_args], flat_args[num_mapped_args:])
             ctx.save_for_backward(*(list(res) + list(flat_args)))
             return tuple([r[-1] for r in res])
 
@@ -381,16 +402,20 @@ class WhileLoopAutogradOp(torch.autograd.Function):
         fw_mapped_args = fw_args[ctx._num_mapped_args:2*ctx._num_mapped_args]
         pos_args = fw_args[2*ctx._num_mapped_args:]
 
-        #TODO: call the while_loop_op in the backward mode with the 
-        # with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
-        #     grads = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
-        #         ctx._cond_graph, ctx._fw_graph, ctx._joint_graph, full_res, fw_mapped_args, pos_args
-        #     )
-        grads = while_loop_op(ctx._cond_graph, ctx._fw_graph, ctx._joint_graph, full_res, fw_mapped_args, pos_args)
+        #TODO: the variable fw_bw of the while_loop_op does not quite work. 
+        # 1.) It always assumes the same value as operands. Thus, this call has to provide the full_res twice
+        # 2.) This call currently does not return the correct result computed in while_loop_dense, but rather just the last elemnt,
+        # like in the forward path
+        with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
+            grads = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
+                ctx._cond_graph, ctx._fw_graph, ctx._joint_graph, full_res, full_res, pos_args
+            )
+        # grads = while_loop_op(ctx._cond_graph, ctx._fw_graph, ctx._joint_graph, full_res, fw_mapped_args, pos_args)
         
-        #multiply body gradients with incoming upstream gradients
+        #Multiply body gradients with incoming upstream gradients
+        grads = [torch.prod(g, 0) for g in grads]
         gs = tuple([g * gu for g, gu in zip(grads, flat_grads)])
-        return None, None, None, *(gs)
+        return None, None, None, None, *gs
 
 @while_loop_op.py_impl(DispatchKey.Autograd)
 def while_loop_autograd(cond_fn, body_fn, body_grad_fn, fw_bw, xs, pos_args):
@@ -434,7 +459,7 @@ def while_loop_tracing(mode, cond_fn, body_fn, body_grad_fn, fw_bw, carried_inpu
         proxy_mode.tracer.root.register_module(body_graph_name, body_graph)
         proxy_mode.tracer.root.register_module(body_grad_graph_name, body_grad_graph)
 
-        args = (cond_graph, body_graph, body_grad_graph, carried_inputs, additional_inputs)
+        args = (cond_graph, body_graph, body_grad_graph, fw_bw, carried_inputs, additional_inputs)
 
         proxy_args = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, args)
 
