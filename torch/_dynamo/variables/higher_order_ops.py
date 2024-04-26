@@ -754,7 +754,7 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
 
         args, kwargs = LazyVariableTracker.realize_all((args, kwargs))
 
-        for i, k in enumerate(["cond_fn", "body_fn", "body_grad_fn", "fw_bw", "operands"]):
+        for i, k in enumerate(["cond_fn", "body_fn", "operands"]):
             if v := kwargs.pop(k, None):
                 assert i == len(
                     args
@@ -766,7 +766,7 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
                 f"torch.while_loop: Got unexpected kwargs: {list(kwargs.keys())}"
             )
 
-        if len(args) != 6:
+        if len(args) != 4:
             unimplemented(
                 f"Expected 4 arguments but got {len(args)}.\n"
                 f"Usage: while_loop(cond_fn, body_fn, operands)",
@@ -785,36 +785,24 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
 
         _check_supported_callable(args[0])
         _check_supported_callable(args[1])
-        _check_supported_callable(args[2])
-        
-        # fw_bw
-        if not isinstance(args[3], (ListVariable, TupleVariable)):
-            unimplemented(
-                f"Expected a tuple but got {args[3].python_type()}",
-            )
-        fw_bw = args[3].unpack_var_sequence(tx)
-        if not only_consist_of(args[3], (TensorVariable,)):
-            unimplemented(
-                "Expect operands to be a tuple of pytrees that only consists of tensor leaves."
-            )
 
         # operands
-        if not isinstance(args[4], (ListVariable, TupleVariable)):
+        if not isinstance(args[2], (ListVariable, TupleVariable)):
             unimplemented(
-                f"Expected a tuple but got {args[4].python_type()}",
+                f"Expected a tuple but got {args[2].python_type()}",
             )
-        operands = args[4].unpack_var_sequence(tx)
-        if not only_consist_of(args[4], (TensorVariable,)):
+        operands = args[2].unpack_var_sequence(tx)
+        if not only_consist_of(args[2], (TensorVariable,)):
             unimplemented(
                 "Expect operands to be a tuple of pytrees that only consists of tensor leaves."
             )
 
         # additional inputs check
-        if not isinstance(args[5], (ListVariable, TupleVariable)):
+        if not isinstance(args[3], (ListVariable, TupleVariable)):
             unimplemented(
-                f"Expected a tuple but got {args[5].python_type()}",
+                f"Expected a tuple but got {args[3].python_type()}",
             )
-        additional_inputs = args[5].unpack_var_sequence(tx)
+        additional_inputs = args[3].unpack_var_sequence(tx)
 
         (
             (cond_r, cond_treespec),
@@ -859,21 +847,6 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
             should_flatten_outputs=True,
         )
         body_nn_modules = dict(tx.output.nn_modules)
-        (
-            (body_grad_r, body_grad_treespec),
-            body_grad_graph,
-            body_grad_lifted_freevars,
-        ) = speculate_subgraph(
-            tx,
-            args[2],
-            operands + additional_inputs,
-            {},
-            "while_loop",
-            source_target=self.value,
-            set_subgraph_inputs="manual",
-            should_flatten_outputs=True,
-        )
-        body_grad_nn_modules = dict(tx.output.nn_modules)
             
         (
             cond_graph,
@@ -907,21 +880,13 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
             "body_fn",
             torch.fx.GraphModule(body_nn_modules, body_graph),
         )
-        body_grad_name = add_subgraph(
-            tx,
-            "body_fn",
-            torch.fx.GraphModule(body_grad_nn_modules, body_grad_graph),
-        )
 
         cond_node = make_attr(tx, cond_name)
         body_node = make_attr(tx, body_name)
-        body_grad_node = make_attr(tx, body_grad_name)
 
         p_args = (
             cond_node,
             body_node,
-            body_grad_node,
-            tuple([fb.as_proxy() for fb in fw_bw]),
             tuple([operand.as_proxy() for operand in operands]),
             tuple(
                 [inp.as_proxy() for inp in additional_inputs] + additional_lifted_inputs
