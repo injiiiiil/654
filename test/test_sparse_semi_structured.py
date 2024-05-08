@@ -22,6 +22,7 @@ from torch.sparse._semi_structured_conversions import (
 
 from torch.testing import make_tensor
 from torch.testing._internal.common_cuda import _get_torch_cuda_version
+from torch.testing._internal.common_cuda import GFX942_Exact
 from torch.testing._internal.common_device_type import (
     dtypes,
     instantiate_device_type_tests,
@@ -41,22 +42,24 @@ from torch.testing._internal.common_utils import (
 import pytest
 
 from torch.utils._triton import has_triton
+import torch.version
 
 SEMI_STRUCTURED_SUPPORTED_BACKENDS = dict()
 
 _IS_SM8X = False
 _IS_SM9X = False
+_IS_MI300x = False
 
 if torch.cuda.is_available():
     _IS_SM8X = torch.cuda.get_device_capability(0)[0] == 8
     _IS_SM9X = torch.cuda.get_device_capability(0)[0] == 9
-
+    _IS_MI300x = torch.version.hip is not None and GFX942_Exact
     # CUTLASS kernels only work for Ampere
     if _IS_SM8X:
         SEMI_STRUCTURED_SUPPORTED_BACKENDS["cutlass"] = SparseSemiStructuredTensorCUTLASS
 
     # add cuSPASRELt tests if available
-    if torch.backends.cusparselt.is_available() and (_IS_SM8X or _IS_SM9X):
+    if torch.backends.cusparselt.is_available() and (_IS_SM8X or _IS_SM9X or _IS_MI300x):
         SEMI_STRUCTURED_SUPPORTED_BACKENDS["cusparselt"] = SparseSemiStructuredTensorCUSPARSELT
 
 inference_dtypes = dtypes(torch.float16, torch.bfloat16, torch.int8)
