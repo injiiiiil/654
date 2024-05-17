@@ -299,6 +299,27 @@ class TestControlFlow(TestCase):
         expected_grads = torch.autograd.grad(expected, (x,), grad_out)
         # self.assertEqual(expected, res)
         self.assertEqual(expected_grads, grads)
+        
+    def test_cond_autograd_simple(self):
+        def true_fn(x):
+            return x.sin()
+            # return (x.sin(),)
+            # return tuple([xel.sin() for xel in x])
+
+        def false_fn(x):
+            return x.cos()
+            # return (x.cos(),)
+            # return tuple([xel.cos() for xel in x])
+
+        x = torch.randn(4, requires_grad=True)
+        pred = torch.tensor(False)
+        result = cond(pred, true_fn, false_fn, [x])
+        self.assertEqual(result, torch.cos(x))
+
+        grad_out = torch.ones_like(result)
+        grads = torch.autograd.grad(result, (x,), grad_out)
+        expected_grads = torch.autograd.grad(torch.cos(x), (x,), grad_out)
+        self.assertEqual(expected_grads, grads)
 
     def test_map_illegal_inputs(self):
         def f(x, y):
