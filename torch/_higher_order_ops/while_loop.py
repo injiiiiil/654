@@ -156,20 +156,33 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
             #TODO: may need dynamic list support here
             if not bw_path:
                 g_list = list(mapped_grads)
-                while bw_cond_fn(mapped_grads, mapped_input):
-                    outp = mapped_input.pop()
-                    inp = mapped_input[-1:]
-                    joint = create_joint(fw_with_masks, aot_config=dummy_aot_config)
-                    _, grads = joint(
-                        # list(inp) if not bw_path else (list(mapped_grads), list(inp)),
-                        list(inp),
-                        [
-                            grad
-                            for grad in mapped_grads
-                            if grad is not None and grad.requires_grad
-                        ],
-                    )
-                    g_list = [torch.mul(g_o, g_n) for g_o, g_n in zip(g_list, list(grads))]
+                # while bw_cond_fn(mapped_grads, mapped_input):
+                #     outp = mapped_input.pop()
+                #     inp = mapped_input[-1:]
+                #     joint = create_joint(fw_with_masks, aot_config=dummy_aot_config)
+                #     _, grads = joint(
+                #         # list(inp) if not bw_path else (list(mapped_grads), list(inp)),
+                #         list(inp),
+                #         [
+                #             grad
+                #             for grad in mapped_grads
+                #             if grad is not None and grad.requires_grad
+                #         ],
+                #     )
+                #     g_list = [torch.mul(g_o, g_n) for g_o, g_n in zip(g_list, list(grads))]
+                outp = mapped_input.pop()
+                inp = mapped_input[-1:]
+                joint = create_joint(fw_with_masks, aot_config=dummy_aot_config)
+                _, grads = joint(
+                    # list(inp) if not bw_path else (list(mapped_grads), list(inp)),
+                    list(inp),
+                    [
+                        grad
+                        for grad in mapped_grads
+                        if grad is not None and grad.requires_grad
+                    ],
+                )
+                g_list = [torch.mul(g_o, g_n) for g_o, g_n in zip(g_list, list(grads))]
             else:
                 g_list = list(mapped_grads)
 
@@ -189,7 +202,7 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
                     return t.clone()
                 return t
 
-            return pytree.tree_map(maybe_clone, g_list)#, pytree.tree_map(maybe_clone, mapped_input_initial)
+            return pytree.tree_map(maybe_clone, tuple(g_list))#, pytree.tree_map(maybe_clone, mapped_input_initial)
         
         # example_grad_xs = list(example_xs_out) + list(example_grad)
         # joint_num_mapped = len(example_grad_xs)
@@ -362,9 +375,11 @@ def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
             
             carried_vals = out
             outs.append(out)
+        
+        return tuple(outs)
     else:
         grad = carried_inputs[0]
-        carried_inputs = carried_inputs[1:]
+        carried_vals = carried_vals_ch = carried_vals_inp = carried_inputs[1]
         
         if not isinstance(grad, tuple):
             raise RuntimeError(
@@ -376,23 +391,29 @@ def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
                 f"carried_inputs of while backward must be a tuple but got {type(carried_inputs)}"
             )
             
-        while pred := cond_fn(grad, *carried_vals):
-            if not _is_boolean_scalar_tensor(pred):
+        grad_acc = grad
+            
+        #TODO: Compiled for a fixed length currently
+        # while pred := cond_fn(grad, carried_vals_ch):
+        while len(carried_vals_ch) > 1:
+            
+            pred = cond_fn(grad, carried_vals_inp)
+            if not _is_boolean_scalar_tensor(pred) and not type(pred) == bool:
                 raise RuntimeError(
                     f"cond_fn must return a boolean scalar tensor but got {pred}"
                 )
-            out = body_fn(*carried_vals, *additional_inputs)
-            assert isinstance(
-                out, tuple
-            ), f"body_fn should return a tuple but got {type(out)}"
-            assert len(out) == len(
-                carried_inputs
-            ), "body_fn should return the same number of elements as carried_inputs"
+            #Option 1
+            grad_acc = [g_acc * g for g_acc, g in zip(grad_acc, body_fn(grad, carried_vals_inp))]
             
-            carried_vals = out
-            outs.append(out)
+            # #Option 2
+            # grad_acc = body_fn(grad, carried_vals_inp)
+            carried_vals_ch = carried_vals_ch[:-1]
+            carried_vals_inp = tuple([carried_vals_inp[-1:] + carried_vals_inp[:-1]][0])
+            assert isinstance(
+                grad, tuple
+            ), f"body_fn in the backward path should return a tuple but got {type(grad)}"
         
-    return tuple(outs)
+        return tuple(grad_acc)
 
 class WhileLoopAutogradOp(torch.autograd.Function):
     @staticmethod
@@ -432,11 +453,7 @@ class WhileLoopAutogradOp(torch.autograd.Function):
         
         # grads = while_loop_op(ctx._bw_cond_graph, ctx._bw_graph, (flat_grads, fw_xs_out), fw_mapped_posargs)
         grads = while_loop_op(ctx._bw_cond_graph, ctx._bw_graph, (flat_grads, fw_xs_out), (True,))
-        
-        #Multiply body gradients with incoming upstream gradients
-        grads = [torch.prod(g, 0) for g in grads]
-        gs = tuple([g * gu for g, gu in zip(grads, flat_grads)])
-        return None, None, None, None, *gs
+        return None, None, None, None, None, grads
 
 @while_loop_op.py_impl(DispatchKey.Autograd)
 def while_loop_autograd(cond_fn, body_fn, xs, pos_args):
