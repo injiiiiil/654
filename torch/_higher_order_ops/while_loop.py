@@ -42,9 +42,6 @@ dummy_aot_config = AOTConfig(
 def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
     mapped_xs = args[:num_mapped_args]
     pos_args = args[num_mapped_args:]
-    
-    # if len(pos_args) > 0 and pos_args[0]:
-    #     mapped_xs = mapped_xs[1:]
 
     # Note: We create "clean" environments for make_fx by suspending all dispatch keys
     # between Autograd and Python key. Currently, we only suspend functionalization but more can be
@@ -114,26 +111,8 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
             fw_graph = make_fx(body_fn)(*example_xs)
             cond_graph = make_fx(cond_fn)(*example_xs)
             bw_cond_graph = make_fx(bw_cond_fn)(example_grad, example_xs_out)
-            
-        # def bw_body_fn(grad, fw_outputs):
-        #     output = fw_outputs.pop()
-        #     last_in = fw_outputs[-1]
-        #     last_grad = torch.autograd.grad(output, last_in, grad)
-        #     return last_grad, fw_outputs
     
         def joint_f(grad, example_fw_outs):
-            
-            # xs_out_num_mapped = len(example_xs_out)
-            # joint_graph = make_fx(joint_f)(example_grad, example_xs_out)
-            
-            # joint_mapped_args = example_args[:joint_num_mapped]
-            # pos_args = example_args[joint_num_mapped:]
-            
-            # mapped_xs_out = joint_mapped_args[:xs_out_num_mapped]
-            # mapped_grads = mapped_xs_out[-num_mapped_args:]
-            # mapped_input_initial = mapped_xs_out[:num_mapped_args]
-            # mapped_input = list(mapped_xs_out[:-num_mapped_args])
-            
             mapped_grads = grad
             mapped_input = list(example_fw_outs[:xs_out_num_mapped])
             pos_args = list(example_fw_outs[xs_out_num_mapped:])
@@ -154,22 +133,11 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
                 ]
 
             #TODO: may need dynamic list support here
-            if not bw_path:
+            #TODO: When the create_fw_bw_graph is invoked within the backward path,
+            #then there a special treatment is necessary
+            if bw_path:
                 g_list = list(mapped_grads)
-                # while bw_cond_fn(mapped_grads, mapped_input):
-                #     outp = mapped_input.pop()
-                #     inp = mapped_input[-1:]
-                #     joint = create_joint(fw_with_masks, aot_config=dummy_aot_config)
-                #     _, grads = joint(
-                #         # list(inp) if not bw_path else (list(mapped_grads), list(inp)),
-                #         list(inp),
-                #         [
-                #             grad
-                #             for grad in mapped_grads
-                #             if grad is not None and grad.requires_grad
-                #         ],
-                #     )
-                #     g_list = [torch.mul(g_o, g_n) for g_o, g_n in zip(g_list, list(grads))]
+            else:
                 outp = mapped_input.pop()
                 inp = mapped_input[-1:]
                 joint = create_joint(fw_with_masks, aot_config=dummy_aot_config)
@@ -182,9 +150,7 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
                         if grad is not None and grad.requires_grad
                     ],
                 )
-                g_list = [torch.mul(g_o, g_n) for g_o, g_n in zip(g_list, list(grads))]
-            else:
-                g_list = list(mapped_grads)
+                g_list = list(grads)
 
             # In order to keep while_loop functional for backward graph,
             # we clone outputs that are aliasing inputs
@@ -204,11 +170,9 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
 
             return pytree.tree_map(maybe_clone, tuple(g_list))#, pytree.tree_map(maybe_clone, mapped_input_initial)
         
-        # example_grad_xs = list(example_xs_out) + list(example_grad)
-        # joint_num_mapped = len(example_grad_xs)
         xs_out_num_mapped = len(example_xs_out)
         example_xs_out = example_xs_out + list(pos_args)
-        joint_graph = make_fx(joint_f)(example_grad, example_xs_out) #grad, fw_output
+        joint_graph = make_fx(joint_f)(example_grad, example_xs_out)
         return cond_graph, fw_graph, bw_cond_graph, joint_graph
 
 class WhileLoopOp(HigherOrderOperator):
@@ -340,7 +304,7 @@ def while_loop(cond_fn, body_fn, carried_inputs):
 @while_loop_op.py_impl(DispatchKey.CompositeExplicitAutograd)
 def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
     carried_vals = carried_inputs
-    outs = [carried_vals]
+    outs = []
     
     bw_path = False
     
@@ -354,7 +318,11 @@ def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
             and pred.dtype == torch.bool
         )
 
+    #TODO: The while_loop_dense behaves a little different in the forward
+    #as well as in the backward path, is this okay?
     if not bw_path:
+        outs.append(carried_vals)
+        
         if not isinstance(carried_inputs, tuple):
             raise RuntimeError(
                 f"carried_inputs must be a tuple but got {type(carried_inputs)}"
@@ -379,6 +347,7 @@ def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
         return tuple(outs)
     else:
         grad = carried_inputs[0]
+        outs.append(grad)
         carried_vals = carried_vals_ch = carried_vals_inp = carried_inputs[1]
         
         if not isinstance(grad, tuple):
@@ -394,7 +363,6 @@ def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
         grad_acc = grad
             
         #TODO: Compiled for a fixed length currently
-        # while pred := cond_fn(grad, carried_vals_ch):
         while len(carried_vals_ch) > 1:
             
             pred = cond_fn(grad, carried_vals_inp)
@@ -402,11 +370,10 @@ def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
                 raise RuntimeError(
                     f"cond_fn must return a boolean scalar tensor but got {pred}"
                 )
-            #Option 1
-            grad_acc = [g_acc * g for g_acc, g in zip(grad_acc, body_fn(grad, carried_vals_inp))]
+            grads = body_fn(grad, carried_vals_inp)
+            outs.append(grads)
+            grad_acc = [g_acc * g for g_acc, g in zip(grad_acc, grads)]
             
-            # #Option 2
-            # grad_acc = body_fn(grad, carried_vals_inp)
             carried_vals_ch = carried_vals_ch[:-1]
             carried_vals_inp = tuple([carried_vals_inp[-1:] + carried_vals_inp[:-1]][0])
             assert isinstance(
@@ -430,6 +397,14 @@ class WhileLoopAutogradOp(torch.autograd.Function):
             #     res = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
             #         cond_graph, fw_graph, flat_args[:num_mapped_args], flat_args[num_mapped_args:]
             #     )
+            #     flattened_res = []
+            #     for r1 in res:
+            #         for r in r1:
+            #             flattened_res.append(r)
+            #     ctx.save_for_backward(*(flattened_res + list(flat_args[num_mapped_args:])))
+            #     return res[-1]
+                
+            #TODO: The compilation does not work, because the produced tuple inside the while_loop_op is not generated properly
             res = while_loop_op(cond_graph, fw_graph, flat_args[:num_mapped_args], flat_args[num_mapped_args:])
             flattened_res = []
             for r1 in res:
@@ -441,17 +416,15 @@ class WhileLoopAutogradOp(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *flat_grads):       
         fw_flattened = ctx.saved_tensors
-        # fw_xs = fw_flattened[:ctx._num_mapped_args]
-        # fw_out = fw_flattened[ctx._num_mapped_args:len(fw_flattened)-ctx._num_pos_args]
         fw_xs_out = fw_flattened[:len(fw_flattened)-ctx._num_pos_args]
         fw_mapped_posargs = fw_flattened[len(fw_flattened)-ctx._num_pos_args:]
 
         # with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
         #     grads = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
-        #         ctx._cond_graph, ctx._bw_graph, full_res, pos_args
+        #         ctx._bw_cond_graph, ctx._bw_graph, (flat_grads, fw_xs_out), (True,)
         #     )
+        #     return None, None, None, None, None, grads
         
-        # grads = while_loop_op(ctx._bw_cond_graph, ctx._bw_graph, (flat_grads, fw_xs_out), fw_mapped_posargs)
         grads = while_loop_op(ctx._bw_cond_graph, ctx._bw_graph, (flat_grads, fw_xs_out), (True,))
         return None, None, None, None, None, grads
 
@@ -461,12 +434,6 @@ def while_loop_autograd(cond_fn, body_fn, xs, pos_args):
     
     def bw_cond_fn(grad, fw_outputs):
         return len(fw_outputs) > 1
-
-    # def bw_body_fn(grad, fw_outputs):
-    #     output = fw_outputs.pop()
-    #     last_in = fw_outputs[-1]
-    #     last_grad = torch.autograd.grad(output, last_in, grad)
-    #     return last_grad, fw_outputs
     
     cond_graph, fw_graph, bw_cond_graph, bw_graph = create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *xs, *pos_args)
     flat_out = WhileLoopAutogradOp.apply(cond_graph, fw_graph, bw_cond_graph, bw_graph, num_mapped_args, *xs, *pos_args)

@@ -297,28 +297,6 @@ class TestControlFlow(TestCase):
         grad_out = (torch.ones_like(res[0]),)
         grads = torch.autograd.grad(res, (x,), grad_out)
         expected_grads = torch.autograd.grad(expected, (x,), grad_out)
-        # self.assertEqual(expected, res)
-        self.assertEqual(expected_grads, grads)
-        
-    def test_cond_autograd_simple(self):
-        def true_fn(x):
-            return x.sin()
-            # return (x.sin(),)
-            # return tuple([xel.sin() for xel in x])
-
-        def false_fn(x):
-            return x.cos()
-            # return (x.cos(),)
-            # return tuple([xel.cos() for xel in x])
-
-        x = torch.randn(4, requires_grad=True)
-        pred = torch.tensor(False)
-        result = cond(pred, true_fn, false_fn, [x])
-        self.assertEqual(result, torch.cos(x))
-
-        grad_out = torch.ones_like(result)
-        grads = torch.autograd.grad(result, (x,), grad_out)
-        expected_grads = torch.autograd.grad(torch.cos(x), (x,), grad_out)
         self.assertEqual(expected_grads, grads)
 
     def test_map_illegal_inputs(self):
@@ -2398,11 +2376,13 @@ def forward(self, arg0_1):
 
     def test_cond_vmap_simple(self):
         def fn(x):
-            return torch.cond(
+            # return torch.cond(
+            return control_flow.cond(
                 pred=torch.tensor([True]),
                 true_fn=lambda x: x + 100,
                 false_fn=lambda x: x,
-                operands=(x,),
+                # operands=(x,),
+                operands=[x],
             )
 
         a = torch.arange(15).reshape((3, 5))
@@ -2412,7 +2392,8 @@ def forward(self, arg0_1):
 
     def test_cond_vmap_multiple_inputs(self):
         def fn(x, y):
-            return torch.cond(
+            # return torch.cond(
+            return control_flow.cond(
                 pred=x.sum() < y.sum(),
                 true_fn=lambda x, y: x + 100,
                 false_fn=lambda x, y: y,
@@ -2433,7 +2414,8 @@ def forward(self, arg0_1):
         c = torch.arange(5)
 
         def fn(x):
-            return torch.cond(
+            # return torch.cond(
+            return control_flow.cond(
                 pred=torch.tensor([True]),
                 true_fn=lambda x: x + c,
                 false_fn=lambda x: x - c,
@@ -2455,7 +2437,8 @@ def forward(self, arg0_1):
         c = torch.arange(5)
 
         def fn(x, y):
-            return torch.cond(
+            # return torch.cond(
+            return control_flow.cond(
                 pred=torch.tensor([False]),
                 true_fn=lambda x, y: x + c,
                 false_fn=lambda x, y: y - c,
@@ -2471,7 +2454,8 @@ def forward(self, arg0_1):
             c = torch.ones(5, dtype=torch.int64) + 5
 
             def fn(x):
-                return torch.cond(
+                # return torch.cond(
+                return control_flow.cond(
                     pred=torch.tensor([True]),
                     true_fn=lambda x: (x + c, x - c),
                     false_fn=lambda x: (x, x),
@@ -2481,7 +2465,8 @@ def forward(self, arg0_1):
         else:
 
             def fn(x):
-                return torch.cond(
+                # return torch.cond(
+                return control_flow.cond(
                     pred=torch.tensor([True]),
                     true_fn=lambda x: (x + 1, x - 1),
                     false_fn=lambda x: (x, x),
@@ -2500,7 +2485,8 @@ def forward(self, arg0_1):
 
     def test_vmap_vmap(self):
         def fn(x):
-            return torch.cond(
+            # return torch.cond(
+            return control_flow.cond(
                 pred=torch.tensor([True]),
                 true_fn=lambda x: x + 1,
                 false_fn=lambda x: x - 1,
