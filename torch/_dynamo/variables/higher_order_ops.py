@@ -845,9 +845,7 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
             source_target=self.value,
             set_subgraph_inputs="manual",
             should_flatten_outputs=True,
-        )
-        body_nn_modules = dict(tx.output.nn_modules)
-            
+        )  
         (
             cond_graph,
             body_graph,
@@ -868,7 +866,7 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
         # so using either of them is OK. Use cond_shared as it doesnt matter.
         additional_lifted_inputs = cond_shared + cond_unique + body_unique
 
-        # body_nn_modules = dict(tx.output.nn_modules)
+        body_nn_modules = dict(tx.output.nn_modules)
 
         cond_name = add_subgraph(
             tx,
