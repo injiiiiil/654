@@ -5,7 +5,6 @@ import torch.utils._pytree as pytree
 
 from torch._C import DispatchKey
 from torch._dispatch.python import suspend_functionalization
-from torch._functorch.aot_autograd import AOTConfig, create_joint, from_fun
 
 from torch._higher_order_ops.utils import (
     _has_potential_branch_input_alias,
@@ -27,19 +26,26 @@ from torch.fx.experimental.proxy_tensor import (
     track_tensor_tree,
 )
 from torch.multiprocessing.reductions import StorageWeakRef
-from torch._higher_order_ops.map import _stack_pytree, _unstack_pytree
-
-dummy_aot_config = AOTConfig(
-    fw_compiler=None,  # type: ignore[arg-type]
-    bw_compiler=None,  # type: ignore[arg-type]
-    partition_fn=None,  # type: ignore[arg-type]
-    decompositions={},
-    num_params_buffers=0,
-    aot_id=0,
-    keep_inference_input_mutations=False,
+from .utils import (
+    _from_fun, 
+    clone_outputs_aliasing_inputs, 
+    prepare_fw_with_masks, 
+    create_fw_bw_graph,
+    _unstack_pytree
 )
 
-def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
+def create_fw_bw_graph_manual(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
+    from torch._functorch.aot_autograd import AOTConfig, create_joint
+    dummy_aot_config = AOTConfig(
+        fw_compiler=None,  # type: ignore[arg-type]
+        bw_compiler=None,  # type: ignore[arg-type]
+        partition_fn=None,  # type: ignore[arg-type]
+        decompositions={},
+        num_params_buffers=0,
+        aot_id=0,
+        keep_inference_input_mutations=False,
+    )
+    
     mapped_xs = args[:num_mapped_args]
     pos_args = args[num_mapped_args:]
 
@@ -60,31 +66,6 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
 
     with suspend_functionalization(), disable_functional_mode():
         with disable_proxy_modes_tracing():
-
-            def _from_fun(t):
-                if isinstance(t, torch.Tensor):
-                    if t.dtype != torch.bool:
-                        return torch.empty_strided(
-                            t.size(),
-                            t.stride(),
-                            dtype=t.dtype,
-                            requires_grad=t.requires_grad,
-                        )
-                    else:
-                        # clone of a functional tensor produces a functional tensor
-                        # but we want to avoid it so we clone a non-functional version
-                        maybe_unfunc_t = t
-                        if isinstance(t, FunctionalTensor):
-                            torch._sync(t)
-                            maybe_unfunc_t = from_fun(t)
-                        elif torch._is_functional_tensor(t):
-                            # need to handle both types of functionalization here:
-                            # these are the tensors that came from the user,
-                            # which could be either FunctionalTensorWrapper or FunctionalTensor
-                            torch._sync(t)
-                            maybe_unfunc_t = torch._from_functional_tensor(t)
-                        return maybe_unfunc_t.clone()
-                return t
 
             unwrapped_mapped_xs = pytree.tree_map(_from_fun, mapped_xs)
             example_xs = _unstack_pytree(unwrapped_mapped_xs)[0]
@@ -108,11 +89,17 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
             example_xs_out = list(example_xs) + list(example_flat_out)
             
             example_grad = tuple([_from_fun(out) for out in example_xs])
-            fw_graph = make_fx(body_fn)(*example_xs)
+            # fw_graph = make_fx(body_fn)(*example_xs)
             cond_graph = make_fx(cond_fn)(*example_xs)
             bw_cond_graph = make_fx(bw_cond_fn)(example_grad, example_xs_out)
+            operands = list(example_xs) + list(pos_args)
+            fw_graph, joint_graph = create_fw_bw_graph(body_fn, True, num_mapped_args, *operands)
+            # cond_graph, bw_cond_graph = create_fw_bw_graph(cond_fn, bw_cond_fn, True, *example_xs)
     
         def joint_f(grad, example_fw_outs):
+        # def joint_f(*args):
+            # grad = args[:grad_num]
+            # example_fw_outs = args[:grad_num]
             mapped_grads = grad
             mapped_input = list(example_fw_outs[:xs_out_num_mapped])
             pos_args = list(example_fw_outs[xs_out_num_mapped:])
@@ -170,9 +157,12 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
 
             return pytree.tree_map(maybe_clone, tuple(g_list))#, pytree.tree_map(maybe_clone, mapped_input_initial)
         
-        xs_out_num_mapped = len(example_xs_out)
-        example_xs_out = example_xs_out + list(pos_args)
-        joint_graph = make_fx(joint_f)(example_grad, example_xs_out)
+        # xs_out_num_mapped = len(example_xs_out)
+        # grad_num = list(example_grad)
+        # example_xs_out = example_xs_out + list(pos_args)
+        # joint_graph = make_fx(joint_f)(example_grad, example_xs_out)
+        # # joint_grads_operands = (list(example_grad), list(example_xs_out))
+        # # joint_graph = make_fx(joint_f)(*joint_grads_operands)
         return cond_graph, fw_graph, bw_cond_graph, joint_graph
 
 class WhileLoopOp(HigherOrderOperator):
@@ -426,16 +416,19 @@ class WhileLoopAutogradOp(torch.autograd.Function):
         #     return None, None, None, None, None, grads
         
         grads = while_loop_op(ctx._bw_cond_graph, ctx._bw_graph, (flat_grads, fw_xs_out), (True,))
+        # operands = tuple(list(flat_grads) + list(fw_xs_out))
+        # grads = while_loop_op(ctx._bw_cond_graph, ctx._bw_graph, operands, (True,))
         return None, None, None, None, None, grads
 
 @while_loop_op.py_impl(DispatchKey.Autograd)
 def while_loop_autograd(cond_fn, body_fn, xs, pos_args):
     num_mapped_args = len(xs)
     
-    def bw_cond_fn(grad, fw_outputs):
-        return len(fw_outputs) > 1
+    #def bw_cond_fn(grad, fw_outputs):
+    def bw_cond_fn(*args):
+        return len(args[-1]) > 1
     
-    cond_graph, fw_graph, bw_cond_graph, bw_graph = create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *xs, *pos_args)
+    cond_graph, fw_graph, bw_cond_graph, bw_graph = create_fw_bw_graph_manual(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *xs, *pos_args)
     flat_out = WhileLoopAutogradOp.apply(cond_graph, fw_graph, bw_cond_graph, bw_graph, num_mapped_args, *xs, *pos_args)
     return flat_out
 
@@ -444,14 +437,8 @@ def while_loop_tracing(mode, cond_fn, body_fn, carried_inputs, additional_inputs
     def _trace_while_loop(
         proxy_mode, while_loop_op, cond_fn, body_fn, carried_inputs, additional_inputs
     ):
-        pre_dispatch = getattr(proxy_mode, "pre_dispatch", False)
-        with disable_proxy_modes_tracing():
-            cond_graph = reenter_make_fx(cond_fn, pre_dispatch)(
-                *carried_inputs, *additional_inputs
-            )
-            body_graph = reenter_make_fx(body_fn, pre_dispatch)(
-                *carried_inputs, *additional_inputs
-            )
+        cond_graph = reenter_make_fx(cond_fn)(*carried_inputs, *additional_inputs)
+        body_graph = reenter_make_fx(body_fn)(*carried_inputs, *additional_inputs)
 
         next_name = None
         i = 0
