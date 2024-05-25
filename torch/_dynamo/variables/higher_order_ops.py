@@ -832,7 +832,7 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
             unimplemented(
                 f"Expected cond_fn to return a tensor with shape (,) but got {cond_r_meta.shape}"
             )
-            
+
         (
             (body_r, body_treespec),
             body_graph,

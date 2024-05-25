@@ -138,7 +138,7 @@ def create_fw_bw_graph(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
             if bw_path:
                 g_list = list(mapped_grads)
             else:
-                outp = mapped_input.pop()
+                # outp = mapped_input.pop()
                 inp = mapped_input[-1:]
                 joint = create_joint(fw_with_masks, aot_config=dummy_aot_config)
                 _, grads = joint(
