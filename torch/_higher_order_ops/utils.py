@@ -260,8 +260,26 @@ def prepare_fw_with_masks(fn):
         ]
     return fw_with_masks
 
-def create_fw_bw_graph(fn, use_output_and_grad_bw, num_mapped_args, *args):
+# TODO: The parameter use_output_and_grad_bw is required because some operations
+# that utilize this function, such as the while_loop, may require (grad, fwd_outputs)
+def create_fw_bw_graph(fn, use_output_and_grad_bw, *operands):
     from torch._functorch.aot_autograd import AOTConfig, create_joint
+
+    # Note:[HOP create fw_bw graph] We create "clean" environments for make_fx by suspending all dispatch keys
+    # between Autograd and Python key. Currently, we only suspend functionalization but more can be
+    # added when required. Will encounter two problems if we don't suspend functionalization:
+    #
+    # 1. make_fx fails to capture operations on input: the inputs are wrapped as _to_functional_tensor_wrapper,
+    # but they will be unwrapped before entering ProxyTorchDispatchMode as part of the dispatching.
+    # However, it's the outside wrapper that tracer creates proxies for. This casuses tracer fail to
+    # fetch the proxy for the inputs and fail to capture any operations on them.
+    #
+    # 2. make_fx fails to capture output: the outputs after ProxyTorchDispatchMode are further
+    # wrapped as FunctionalTensorWrapper in Functionalize key after return. However, the tracer
+    # only associates the inner tensor with proxy in ProxyTorchDispatchMode. Therefore,
+    # when creating the output node, it fails to associate the wrapped tensor with its proxy.
+    # Instead, it will create _tensor_constant as output.
+
     dummy_aot_config = AOTConfig(
         fw_compiler=None,  # type: ignore[arg-type]
         bw_compiler=None,  # type: ignore[arg-type]
@@ -271,71 +289,40 @@ def create_fw_bw_graph(fn, use_output_and_grad_bw, num_mapped_args, *args):
         aot_id=0,
         keep_inference_input_mutations=False,
     )
-    
-    operands = args[:num_mapped_args]
-    pos_args = args[num_mapped_args:]
-    
-    example_flat_out = pytree.tree_map(
-        _from_fun, fn(*operands)
-    )
+
+    example_flat_out = pytree.tree_map(_from_fun, fn(*operands))
     example_grad = [_from_fun(out) for out in example_flat_out]
     num_grads = len(example_grad)
+    # fw_graph = make_fx(fn, record_module_stack=True, _error_on_data_dependent_ops=True)(*operands)
     fw_graph = make_fx(fn)(*operands)
 
-    def joint_fn(*joint_mapped_args):
-
-        # if use_output_and_grad_bw:
-        #     mapped_grads = joint_mapped_args[0]
-        #     mapped_input = joint_mapped_args[1][:num_mapped_args][-1:]
-        #     mapped_pos_args = joint_mapped_args[1][num_mapped_args:]
-        # else:
-        #     mapped_grads = joint_mapped_args[:num_grads]
-        #     mapped_input = joint_mapped_args[num_grads:num_grads+num_mapped_args]
-        #     mapped_pos_args = joint_mapped_args[num_grads+num_mapped_args:]
-            
-        mapped_grads = joint_mapped_args[0]
-        mapped_input = joint_mapped_args[1][:num_mapped_args][-1:]
-        mapped_pos_args = joint_mapped_args[1][num_mapped_args:]
-        
-        bw_path = False
-        
-        if len(mapped_pos_args) > 0 and mapped_pos_args[0]:
-            bw_path = True
+    def joint_fn(*joint_operands_grads):
+        if use_output_and_grad_bw:
+            grads = joint_operands_grads[0]
+            inputs = joint_operands_grads[1][-1:]
+        else:
+            grads = joint_operands_grads[:num_grads]
+            inputs = joint_operands_grads[num_grads:]
 
         joint = create_joint(prepare_fw_with_masks(fn), aot_config=dummy_aot_config)
-        if bw_path:
-            grads = list(mapped_grads)
-        else:
-            _, grads = joint(
-                list(mapped_input),
-                [
-                    grad
-                    for grad in mapped_grads
-                    if grad is not None and grad.requires_grad
-                ],
-            )
+        _, grads = joint(
+            list(inputs),
+            [grad for grad in grads if grad is not None and grad.requires_grad],
+        )
 
         # In order to keep map functional for backward graph,
-        # we clone outputs that are aliasing inputs           
-        maybe_clone = clone_outputs_aliasing_inputs(joint_mapped_args)
+        # we clone outputs that are aliasing inputs
+        maybe_clone = clone_outputs_aliasing_inputs(joint_operands_grads)
 
         return pytree.tree_map(maybe_clone, grads)
-    
-    # if use_output_and_grad_bw:
-    #     example_xs_out = list(operands) + list(example_flat_out)
-    #     num_mapped_args = len(example_xs_out)
-    #     example_xs_out = example_xs_out + list(pos_args)
-    #     joint_operands_grads = (list(example_grad), list(example_xs_out))
-    # else:
-    #     example_xs_out = list(operands) + list(pos_args)
-    #     joint_operands_grads = list(example_grad) + list(example_xs_out)
-        
-    example_xs_out = list(operands) + list(example_flat_out)
-    num_mapped_args = len(example_xs_out)
-    example_xs_out = example_xs_out + list(pos_args)
-    joint_operands_grads = (list(example_grad), list(example_xs_out))
-        
-    joint_graph = make_fx(joint_fn)(*joint_operands_grads)
+
+    if use_output_and_grad_bw:
+        example_xs_out = list(operands) + list(example_flat_out)
+        joint_graph = make_fx(joint_fn)(*(list(example_grad), list(example_xs_out)))
+    else:
+        example_xs_out = list(operands)
+        joint_graph = make_fx(joint_fn)(*(list(example_grad) + list(example_xs_out)))
+
     return fw_graph, joint_graph
 
 def _unstack_pytree(xs):

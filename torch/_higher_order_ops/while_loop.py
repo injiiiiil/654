@@ -93,8 +93,16 @@ def create_fw_bw_graph_manual(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *ar
             cond_graph = make_fx(cond_fn)(*example_xs)
             bw_cond_graph = make_fx(bw_cond_fn)(example_grad, example_xs_out)
             operands = list(example_xs) + list(pos_args)
-            fw_graph, joint_graph = create_fw_bw_graph(body_fn, True, num_mapped_args, *operands)
-            # cond_graph, bw_cond_graph = create_fw_bw_graph(cond_fn, bw_cond_fn, True, *example_xs)
+            
+            bw_path = False
+        
+            if len(pos_args) > 0 and pos_args[0]:
+                bw_path = True
+
+            if bw_path:
+                fw_graph, joint_graph = make_fx(body_fn)(*example_xs), make_fx(body_fn)(*example_xs)
+            else:
+                fw_graph, joint_graph = create_fw_bw_graph(body_fn, True, *operands)
     
         def joint_f(grad, example_fw_outs):
         # def joint_f(*args):
