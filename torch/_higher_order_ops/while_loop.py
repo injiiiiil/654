@@ -4,19 +4,174 @@ import torch
 import torch.utils._pytree as pytree
 
 from torch._C import DispatchKey
+from torch._dispatch.python import suspend_functionalization
 
 from torch._higher_order_ops.utils import (
     _has_potential_branch_input_alias,
     _has_potential_branch_input_mutation,
     _set_compilation_env,
-    autograd_not_implemented,
     reenter_make_fx,
     UnsupportedAliasMutationException,
 )
 from torch._ops import HigherOrderOperator
 from torch._subclasses.fake_tensor import FakeTensorMode
-from torch.fx.experimental.proxy_tensor import ProxyTorchDispatchMode, track_tensor_tree
+from torch._subclasses.functional_tensor import (
+    disable_functional_mode,
+    FunctionalTensor,
+)
+from torch.fx.experimental.proxy_tensor import (
+    disable_proxy_modes_tracing,
+    make_fx,
+    ProxyTorchDispatchMode,
+    track_tensor_tree,
+)
+from torch.multiprocessing.reductions import StorageWeakRef
+from .utils import (
+    _from_fun, 
+    clone_outputs_aliasing_inputs, 
+    prepare_fw_with_masks, 
+    create_fw_bw_graph,
+    _unstack_pytree
+)
 
+def create_fw_bw_graph_manual(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *args):
+    from torch._functorch.aot_autograd import AOTConfig, create_joint
+    dummy_aot_config = AOTConfig(
+        fw_compiler=None,  # type: ignore[arg-type]
+        bw_compiler=None,  # type: ignore[arg-type]
+        partition_fn=None,  # type: ignore[arg-type]
+        decompositions={},
+        num_params_buffers=0,
+        aot_id=0,
+        keep_inference_input_mutations=False,
+    )
+    
+    mapped_xs = args[:num_mapped_args]
+    pos_args = args[num_mapped_args:]
+
+    # Note: We create "clean" environments for make_fx by suspending all dispatch keys
+    # between Autograd and Python key. Currently, we only suspend functionalization but more can be
+    # added when required. Will encounter two problems if we don't suspend functionalization:
+    #
+    # 1. make_fx fails to capture operations on input: the inputs are wrapped as _to_functional_tensor_wrapper,
+    # but they will be unwrapped before entering ProxyTorchDispatchMode as part of the dispatching.
+    # However, it's the outside wrapper that tracer creates proxies for. This casuses tracer fail to
+    # fetch the proxy for the inputs and fail to capture any operations on them.
+    #
+    # 2. make_fx fails to capture output: the outputs after ProxyTorchDispatchMode are further
+    # wrapped as FunctionalTensorWrapper in Functionalize key after return. However, the tracer
+    # only associates the inner tensor with proxy in ProxyTorchDispatchMode. Therefore,
+    # when creating the output node, it fails to associate the wrapped tensor with its proxy.
+    # Instead, it will create _tensor_constant as output.
+
+    with suspend_functionalization(), disable_functional_mode():
+        with disable_proxy_modes_tracing():
+
+            unwrapped_mapped_xs = pytree.tree_map(_from_fun, mapped_xs)
+            example_xs = _unstack_pytree(unwrapped_mapped_xs)[0]
+
+            example_pos_args = [
+                _from_fun(arg) if isinstance(arg, torch.Tensor) else arg
+                for arg in pos_args
+            ]
+
+            example_flat_out = pytree.tree_map(
+                _from_fun, body_fn(*example_xs)
+            )
+            if any(
+                not isinstance(out, torch.Tensor) for out in example_flat_out if out is not None
+            ):
+                raise RuntimeError(
+                    "Expect outputs of map only contains tensors or None. "
+                    f"Got types {[type(out) for out in example_flat_out]}."
+                )
+                
+            example_xs_out = list(example_xs) + list(example_flat_out)
+            
+            example_grad = tuple([_from_fun(out) for out in example_xs])
+            # fw_graph = make_fx(body_fn)(*example_xs)
+            cond_graph = make_fx(cond_fn)(*example_xs)
+            bw_cond_graph = make_fx(bw_cond_fn)(example_grad, example_xs_out)
+            operands = list(example_xs) + list(pos_args)
+            
+            bw_path = False
+        
+            if len(pos_args) > 0 and pos_args[0]:
+                bw_path = True
+
+            if bw_path:
+                fw_graph, joint_graph = make_fx(body_fn)(*example_xs), make_fx(body_fn)(*example_xs)
+            else:
+                fw_graph, joint_graph = create_fw_bw_graph(body_fn, True, *operands)
+    
+        def joint_f(grad, example_fw_outs):
+        # def joint_f(*args):
+            # grad = args[:grad_num]
+            # example_fw_outs = args[:grad_num]
+            mapped_grads = grad
+            mapped_input = list(example_fw_outs[:xs_out_num_mapped])
+            pos_args = list(example_fw_outs[xs_out_num_mapped:])
+            bw_path = False
+            
+            if len(pos_args) > 0 and pos_args[0]:
+                mapped_grads = grad[0]
+                mapped_input = list(mapped_input[1])
+                bw_path = True
+
+            def fw_with_masks(*args):
+                fw_out = body_fn(*args)
+                return fw_out, [
+                    True
+                    if isinstance(ret, torch.Tensor) and ret.requires_grad
+                    else False
+                    for ret in fw_out
+                ]
+
+            #TODO: may need dynamic list support here
+            #TODO: When the create_fw_bw_graph is invoked within the backward path,
+            #then there a special treatment is necessary
+            if bw_path:
+                g_list = list(mapped_grads)
+            else:
+                # outp = mapped_input.pop()
+                inp = mapped_input[-1:]
+                joint = create_joint(fw_with_masks, aot_config=dummy_aot_config)
+                _, grads = joint(
+                    # list(inp) if not bw_path else (list(mapped_grads), list(inp)),
+                    list(inp),
+                    [
+                        grad
+                        for grad in mapped_grads
+                        if grad is not None and grad.requires_grad
+                    ],
+                )
+                g_list = list(grads)
+
+            # In order to keep while_loop functional for backward graph,
+            # we clone outputs that are aliasing inputs
+            input_storage = {
+                StorageWeakRef(arg._typed_storage())
+                for arg in example_fw_outs
+                if isinstance(arg, torch.Tensor)
+            }
+
+            def maybe_clone(t):
+                if (
+                    isinstance(t, torch.Tensor)
+                    and StorageWeakRef(t._typed_storage()) in input_storage
+                ):
+                    return t.clone()
+                return t
+
+            return pytree.tree_map(maybe_clone, tuple(g_list))#, pytree.tree_map(maybe_clone, mapped_input_initial)
+        
+        # xs_out_num_mapped = len(example_xs_out)
+        # grad_num = list(example_grad)
+        # example_xs_out = example_xs_out + list(pos_args)
+        # joint_graph = make_fx(joint_f)(example_grad, example_xs_out)
+        # # joint_grads_operands = (list(example_grad), list(example_xs_out))
+        # # joint_graph = make_fx(joint_f)(*joint_grads_operands)
+        return cond_graph, fw_graph, bw_cond_graph, joint_graph
 
 class WhileLoopOp(HigherOrderOperator):
     def __init__(self):
@@ -39,7 +194,7 @@ class WhileLoopOp(HigherOrderOperator):
                 f"additional_inputs must be a tuple, got {type(additional_inputs)}"
             )
         if not all(
-            isinstance(t, (torch.Tensor, int, float, bool)) for t in carried_inputs
+            isinstance(t, (torch.Tensor, int, float, bool, tuple)) for t in carried_inputs
         ):
             raise RuntimeError(
                 "carried_inputs must be a tuple of tensors, ints, floats, or bools, got "
@@ -120,6 +275,7 @@ def while_loop(cond_fn, body_fn, carried_inputs):
     # Currently, additional_inputs is not a user-facing input. It will be automatically set in dynamo.
     # parameters and buffers accessed in cond_fn or body_fn or tensor closures will become additional_inputs.
     additional_inputs: Tuple = tuple()
+    
     if torch.compiler.is_dynamo_compiling():
         return while_loop_op(cond_fn, body_fn, carried_inputs, additional_inputs)
 
@@ -146,7 +302,13 @@ def while_loop(cond_fn, body_fn, carried_inputs):
 @while_loop_op.py_impl(DispatchKey.CompositeExplicitAutograd)
 def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
     carried_vals = carried_inputs
-
+    outs = []
+    
+    bw_path = False
+    
+    if len(additional_inputs) > 0 and additional_inputs[0]:
+        bw_path = True
+        
     def _is_boolean_scalar_tensor(pred):
         return (
             isinstance(pred, torch.Tensor)
@@ -154,31 +316,129 @@ def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
             and pred.dtype == torch.bool
         )
 
-    if not isinstance(carried_inputs, tuple):
-        raise RuntimeError(
-            f"carried_inputs must be a tuple but got {type(carried_inputs)}"
-        )
-
-    while pred := cond_fn(*carried_vals, *additional_inputs):
-        if not _is_boolean_scalar_tensor(pred):
+    #TODO: The while_loop_dense behaves a little different in the forward
+    #as well as in the backward path, is this okay?
+    if not bw_path:
+        outs.append(carried_vals)
+        
+        if not isinstance(carried_inputs, tuple):
             raise RuntimeError(
-                f"cond_fn must return a boolean scalar tensor but got {pred}"
+                f"carried_inputs must be a tuple but got {type(carried_inputs)}"
             )
-        out = body_fn(*carried_vals, *additional_inputs)
-        assert isinstance(
-            out, tuple
-        ), f"body_fn should return a tuple but got {type(out)}"
-        assert len(out) == len(
-            carried_inputs
-        ), "body_fn should return the same number of elements as carried_inputs"
-        carried_vals = out
-    return carried_vals
 
+        while pred := cond_fn(*carried_vals, *additional_inputs):
+            if not _is_boolean_scalar_tensor(pred):
+                raise RuntimeError(
+                    f"cond_fn must return a boolean scalar tensor but got {pred}"
+                )
+            out = body_fn(*carried_vals, *additional_inputs)
+            assert isinstance(
+                out, tuple
+            ), f"body_fn should return a tuple but got {type(out)}"
+            assert len(out) == len(
+                carried_inputs
+            ), "body_fn should return the same number of elements as carried_inputs"
+            
+            carried_vals = out
+            outs.append(out)
+        
+        return tuple(outs)
+    else:
+        grad = carried_inputs[0]
+        outs.append(grad)
+        carried_vals = carried_vals_ch = carried_vals_inp = carried_inputs[1]
+        
+        if not isinstance(grad, tuple):
+            raise RuntimeError(
+                f"grad of while backward must be a tuple but got {type(grad)}"
+            )
+            
+        if not isinstance(carried_inputs, tuple):
+            raise RuntimeError(
+                f"carried_inputs of while backward must be a tuple but got {type(carried_inputs)}"
+            )
+            
+        grad_acc = grad
+            
+        #TODO: Compiled for a fixed length currently
+        while len(carried_vals_ch) > 1:
+            
+            pred = cond_fn(grad, carried_vals_inp)
+            if not _is_boolean_scalar_tensor(pred) and not type(pred) == bool:
+                raise RuntimeError(
+                    f"cond_fn must return a boolean scalar tensor but got {pred}"
+                )
+            grads = body_fn(grad, carried_vals_inp)
+            outs.append(grads)
+            grad_acc = [g_acc * g for g_acc, g in zip(grad_acc, grads)]
+            
+            carried_vals_ch = carried_vals_ch[:-1]
+            carried_vals_inp = tuple([carried_vals_inp[-1:] + carried_vals_inp[:-1]][0])
+            assert isinstance(
+                grad, tuple
+            ), f"body_fn in the backward path should return a tuple but got {type(grad)}"
+        
+        return tuple(grad_acc)
 
-while_loop_op.py_impl(DispatchKey.Autograd)(
-    autograd_not_implemented(while_loop_op, deferred_error=True)
-)
+class WhileLoopAutogradOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, cond_graph, fw_graph, bw_cond_graph, bw_graph, num_mapped_args, *flat_args):
+        ctx._cond_graph = cond_graph
+        ctx._bw_cond_graph = bw_cond_graph
+        ctx._fw_graph = fw_graph
+        ctx._bw_graph = bw_graph
+        ctx._num_mapped_args = num_mapped_args
+        ctx._num_pos_args = len(flat_args[num_mapped_args:])
+        
+        with torch._C._AutoDispatchBelowAutograd():
+            # with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
+            #     res = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
+            #         cond_graph, fw_graph, flat_args[:num_mapped_args], flat_args[num_mapped_args:]
+            #     )
+            #     flattened_res = []
+            #     for r1 in res:
+            #         for r in r1:
+            #             flattened_res.append(r)
+            #     ctx.save_for_backward(*(flattened_res + list(flat_args[num_mapped_args:])))
+            #     return res[-1]
+                
+            #TODO: The compilation does not work, because the produced tuple inside the while_loop_op is not generated properly
+            res = while_loop_op(cond_graph, fw_graph, flat_args[:num_mapped_args], flat_args[num_mapped_args:])
+            flattened_res = []
+            for r1 in res:
+                for r in r1:
+                    flattened_res.append(r)
+            ctx.save_for_backward(*(flattened_res + list(flat_args[num_mapped_args:])))
+            return res[-1]
 
+    @staticmethod
+    def backward(ctx, *flat_grads):       
+        fw_flattened = ctx.saved_tensors
+        fw_xs_out = fw_flattened[:len(fw_flattened)-ctx._num_pos_args]
+        fw_mapped_posargs = fw_flattened[len(fw_flattened)-ctx._num_pos_args:]
+
+        # with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
+        #     grads = torch.compile(while_loop_op, backend="eager", fullgraph=True)(
+        #         ctx._bw_cond_graph, ctx._bw_graph, (flat_grads, fw_xs_out), (True,)
+        #     )
+        #     return None, None, None, None, None, grads
+        
+        grads = while_loop_op(ctx._bw_cond_graph, ctx._bw_graph, (flat_grads, fw_xs_out), (True,))
+        # operands = tuple(list(flat_grads) + list(fw_xs_out))
+        # grads = while_loop_op(ctx._bw_cond_graph, ctx._bw_graph, operands, (True,))
+        return None, None, None, None, None, grads
+
+@while_loop_op.py_impl(DispatchKey.Autograd)
+def while_loop_autograd(cond_fn, body_fn, xs, pos_args):
+    num_mapped_args = len(xs)
+    
+    #def bw_cond_fn(grad, fw_outputs):
+    def bw_cond_fn(*args):
+        return len(args[-1]) > 1
+    
+    cond_graph, fw_graph, bw_cond_graph, bw_graph = create_fw_bw_graph_manual(cond_fn, body_fn, bw_cond_fn, num_mapped_args, *xs, *pos_args)
+    flat_out = WhileLoopAutogradOp.apply(cond_graph, fw_graph, bw_cond_graph, bw_graph, num_mapped_args, *xs, *pos_args)
+    return flat_out
 
 @while_loop_op.py_impl(ProxyTorchDispatchMode)
 def while_loop_tracing(mode, cond_fn, body_fn, carried_inputs, additional_inputs):
