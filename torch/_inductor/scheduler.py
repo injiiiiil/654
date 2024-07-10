@@ -3148,8 +3148,20 @@ class Scheduler:
         with dynamo_timed("Scheduler.codegen"):
             return self._codegen()
 
+    def get_traning_phase(self) -> str:
+        if V.is_inference:
+            return "inference"
+        if V.is_backward:
+            return "backward"
+        return "forward"
+
     def _codegen(self) -> None:
+        phase = self.get_traning_phase()
+        if config.annotate_training:
+            V.graph.wrapper_code.writeline(f"training_annotation = nvtx.device_range_start('{phase}')")
         for node in self.nodes:
+            if config.annotate_buffers:
+                V.graph.wrapper_code.writeline(f"buffer_annotation = nvtx.device_range_start('{node.get_name()}')")
             try:
                 log.debug(
                     "Generating code for node %s with estimated runtime %f",
@@ -3220,10 +3232,16 @@ class Scheduler:
                 if device is not None and self.get_backend(device).ready_to_flush():
                     self.flush()
 
+            if config.annotate_buffers:
+                V.graph.wrapper_code.writeline("nvtx.device_range_end(buffer_annotation)")
+
         if self.current_device and device_need_guard(self.current_device.type):
             # exit the outermost CUDA device guard. this is
             # important for nested indentation codegen-ing.
             V.graph.wrapper_code.codegen_device_guard_exit()
+
+        if config.annotate_training:
+            V.graph.wrapper_code.writeline("nvtx.device_range_end(training_annotation)")
 
         self.flush()
 
