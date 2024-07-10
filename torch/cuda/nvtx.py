@@ -66,6 +66,20 @@ def range_end(range_id) -> None:
     _nvtx.rangeEnd(range_id)
 
 
+def device_range_start(msg) -> int:
+    """
+    TBD
+    """
+    return _nvtx.deviceRangeStart(msg)
+
+
+def device_range_end(range_id) -> None:
+    """
+    TBD
+    """
+    _nvtx.deviceRangeEnd(range_id)
+
+
 def mark(msg):
     """
     Describe an instantaneous event that occurred at some point.
