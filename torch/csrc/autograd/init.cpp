@@ -502,7 +502,7 @@ static PyObject* set_autocast_enabled(
     PyObject* kwargs) {
   HANDLE_TH_ERRORS
   static PythonArgParser parser(
-      {"set_autocast_enabled(c10::string_view device_type, bool enabled)",
+      {"set_autocast_enabled(std::string_view device_type, bool enabled)",
        "set_autocast_enabled(bool enabled)"}); // this signature is depracated.
   ParsedArgs<2> parsed_args;
   auto r = parser.parse(args, kwargs, parsed_args);
@@ -525,7 +525,7 @@ static PyObject* is_autocast_enabled(
     PyObject* kwargs) {
   HANDLE_TH_ERRORS
   static PythonArgParser parser(
-      {"is_autocast_enabled(c10::string_view device_type)",
+      {"is_autocast_enabled(std::string_view device_type)",
        "is_autocast_enabled()"}); // this signature is depracated.
   ParsedArgs<1> parsed_args;
   auto r = parser.parse(args, kwargs, parsed_args);
@@ -548,7 +548,7 @@ static PyObject* get_autocast_dtype(
     PyObject* kwargs) {
   HANDLE_TH_ERRORS
   static PythonArgParser parser(
-      {"get_autocast_dtype(c10::string_view device_type)"});
+      {"get_autocast_dtype(std::string_view device_type)"});
   ParsedArgs<1> parsed_args;
   auto r = parser.parse(args, kwargs, parsed_args);
   auto device_type = at::Device(r.string(0)).type();
@@ -563,7 +563,7 @@ static PyObject* set_autocast_dtype(
     PyObject* kwargs) {
   HANDLE_TH_ERRORS
   static PythonArgParser parser(
-      {"set_autocast_dtype(c10::string_view device_type, ScalarType dtype)"});
+      {"set_autocast_dtype(std::string_view device_type, ScalarType dtype)"});
   ParsedArgs<2> parsed_args;
   auto r = parser.parse(args, kwargs, parsed_args);
   auto device_type = at::Device(r.string(0)).type();
@@ -595,7 +595,7 @@ static PyObject* is_autocast_available(
     PyObject* kwargs) {
   HANDLE_TH_ERRORS
   static PythonArgParser parser(
-      {"_is_autocast_available(c10::string_view device_type)"});
+      {"_is_autocast_available(std::string_view device_type)"});
   ParsedArgs<1> parsed_args;
   auto r = parser.parse(args, kwargs, parsed_args);
   auto device_type = at::Device(r.string(0)).type();
