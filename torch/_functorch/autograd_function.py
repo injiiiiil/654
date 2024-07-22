@@ -147,7 +147,6 @@ def generate_single_level_function(interpreter, autograd_function):
     )
     return Generated
 
-
 # wrap_outputs_maintaining_identity handles outputs from the vmap,
 # backward (vjp), and jvp staticmethod. The way it distinguishes
 # between the vmap case and the {backward, jvp} case is if the out_dims

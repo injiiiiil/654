@@ -181,6 +181,8 @@ class CustomOpDef:
         self._backward_fn: Optional[Callable] = None
         self._torch_dispatch_fns: Dict[type, Callable] = {}
         self._vmap_fn: Optional[Callable] = None
+        self._jvp_fn: Optional[Callable] = None
+        self._setup_context_fn_jvp: Optional[Callable] = None
 
         self._lib = get_library_allowing_overwrite(self._namespace, self._name)
         self._register_to_dispatcher()
@@ -759,6 +761,16 @@ class CustomOpDef:
             return register
         else:
             return register(func)
+
+    def register_jvp(
+        self, 
+        func: Optional[Callable] = None, 
+        /,
+        *,
+        setup_context: Optional[Callable] = None,
+    ):
+        self._jvp_fn = func
+        self._setup_context_fn_jvp = setup_context
 
 
 # NOTE: [Supporting decorator and non-decorator usage]
