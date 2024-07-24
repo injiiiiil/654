@@ -662,7 +662,7 @@ class TestConverter(TestCase):
             )
 
         # Nested module testing.
-        inp = (torch.ones(3),)
+        inp = (torch.ones(4, 3),)
         orig_m = NestedM(3)
         ep_list = self._check_equal_ts_ep_converter(orig_m, inp)
 
@@ -858,16 +858,16 @@ class TestConverter(TestCase):
         )
         ep_list = self._check_equal_ts_ep_converter(func6, inp)
 
-        # TODO: Additional check once dynamic shape is supported.
-        # for ep in ep_list:
-        #     self.assertEqual(
-        #         ep.module()(
-        #             torch.randn([1, 1, 1]).to(torch.int8),
-        #             torch.randn([1, 1, 1]).to(torch.int32),
-        #             torch.randn([1, 1, 1]).to(torch.float32),
-        #             torch.randn([1, 1, 1]).to(torch.float64),
-        #         )[0], 1
-        #     )
+        for ep in ep_list:
+            self.assertEqual(
+                ep.module()(
+                    torch.randn([1, 1, 1]).to(torch.int8),
+                    torch.randn([1, 1, 1]).to(torch.int32),
+                    torch.randn([1, 1, 1]).to(torch.float32),
+                    torch.randn([1, 1, 1]).to(torch.float64),
+                )[0],
+                1,
+            )
 
     def test_prim_tolist(self):
         class Module(torch.nn.Module):
