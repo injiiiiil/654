@@ -1092,7 +1092,9 @@ class GraphModule(torch.nn.Module):
 
     class GraphModule(torch.nn.Module):
         def forward(self, l_x_: "f32[3, 4]"):
-            add_: "f32[3, 4]" = l_x_.add_(1.0);  l_x_ = None
+            l_x__1 = l_x_
+
+            add_: "f32[3, 4]" = l_x__1.add_(1.0);  l_x__1 = None
             return (add_,)
 """,
         )
@@ -1116,7 +1118,9 @@ class GraphModule(torch.nn.Module):
 
     class GraphModule(torch.nn.Module):
         def forward(self, l_x_):
-            add_ = l_x_.add_(1.0);  l_x_ = None
+            l_x__1 = l_x_
+
+            add_ = l_x__1.add_(1.0);  l_x__1 = None
             return (add_,)
 """,
         )
@@ -1146,7 +1150,9 @@ class GraphModule(torch.nn.Module):
 
     class GraphModule(torch.nn.Module):
         def forward(self, l_x_):
-            add_ = l_x_.add_(1.0);  l_x_ = None
+            l_x__1 = l_x_
+
+            add_ = l_x__1.add_(1.0);  l_x__1 = None
             return (add_,)
 """,
         )
