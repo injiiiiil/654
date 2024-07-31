@@ -1011,10 +1011,10 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
 
         args, kwargs = LazyVariableTracker.realize_all((args, kwargs))
 
-        def arg_extractor(combine_fn, input, dim):
-            return combine_fn, input, dim
+        def arg_extractor(combine_fn, input, dim, lifted_args):
+            return combine_fn, input, dim, lifted_args
 
-        combine_fn, input, dim = arg_extractor(*args, **kwargs)
+        combine_fn, input, dim, lifted_args = arg_extractor(*args, **kwargs)
 
         if input.python_type() != list:
             unimplemented(
@@ -1024,9 +1024,27 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
 
         # Trace the subgraph
         # TODO: Fix these pointless new_empty calls appearing in the dynamo output graph.
-        null_shape = SourcelessBuilder.create(tx, ())
         sub_args = [
-            leaf.call_method(tx, "new_empty", args=(null_shape,), kwargs={})
+            leaf.call_method(
+                tx,
+                "new_empty",
+                args=(
+                    SourcelessBuilder.create(
+                        tx,
+                        leaf.size
+                        if leaf.size is not None
+                        else BuiltinVariable(getattr)
+                            .call_function(
+                                tx, [leaf, ConstantVariable.create("shape")], {}
+                            )
+                            .items,
+                    ),
+                ),
+                kwargs={
+                    "dtype": SourcelessBuilder.create(tx, leaf.dtype),
+                    "requires_grad": SourcelessBuilder.create(tx, leaf.requires_grad)
+                },
+            )
             for leaf in itertools.chain(input.items, input.items)
         ]
         (
@@ -1043,10 +1061,7 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
             set_subgraph_inputs="flatten_manual",
         )
 
-        if combine_lifted_freevars:
-            unimplemented(
-                f"Combine fn had unexpected freevars: {combine_lifted_freevars}"
-            )
+        lifted_args = tuple(arg for arg in combine_lifted_freevars.keys())
 
         if combine_result.python_type() != list:
             unimplemented(
@@ -1069,11 +1084,6 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
                     + f"got {combine_result_meta.dtype}"
                 )
 
-            if combine_result_meta.shape != ():
-                unimplemented(
-                    f"Expected combine_fn to return a tensor with shape () but got {combine_result_meta.shape}"
-                )
-
         combine_gm = torch.fx.GraphModule(dict(tx.output.nn_modules), combine_graph)
         combine_fn_name = add_subgraph(tx, "scan_combine", combine_gm)
 
@@ -1081,6 +1091,7 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
             make_attr(tx, combine_fn_name),
             input_proxy,
             dim.as_proxy(),
+            lifted_args,
         )
 
         with tx.fake_mode:
