@@ -1082,6 +1082,46 @@ class trace:
     log_autotuning_results: bool = False
 
 
+def get_config_value(name: str) -> Optional[bool]:
+    value = os.environ.get(name, None)
+    if value is None:
+        return None
+    return value == "1"
+
+
+# configs for the benchmarking module:
+# 0: Force disable
+# 1: Force enable
+# None: Enable in OSS (expect for fallbacks), JK-based for internal
+class benchmarking:
+    # emergency fallback to original implementation of benchmarking
+    fallback_to_original_benchmarking: Optional[bool] = get_config_value(
+        "TORCHINDUCTOR_FALLBACK_TO_ORIGINAL_BENCHMARKING"
+    )
+
+    # enable lazy benchmarking which postpones benchmarking until timing value
+    # is required, allows the benchmarking module to group similar benchmarks
+    # together for faster and more accurate timing values
+    enable_lazy_benchmarking: Optional[bool] = get_config_value(
+        "TORCHINDUCTOR_ENABLE_LAZY_BENCHMARKING"
+    )
+
+    # enable early ranking which terminates after the estimation loop for
+    # grouped benchmarkings, this significantly reduces benchmarking overhead
+    # when the ordering of kernels by performance is important and the actual
+    # timing value is not used
+    enable_early_ranking: Optional[bool] = get_config_value(
+        "TORCHINDUCTOR_ENABLE_EARLY_RANKING"
+    )
+
+    # enables early pruning which removes underperforming kernels after the
+    # estimation loop, this reduces benchmarking overhead by fully benchmarking
+    # only the most promising of kernels
+    enable_early_pruning: Optional[bool] = get_config_value(
+        "TORCHINDUCTOR_ENABLE_EARLY_PRUNING"
+    )
+
+
 _save_config_ignore = [
     # workaround: "Can't pickle <function ...>"
     "trace.upload_tar",

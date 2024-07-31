@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import torch
 
+from .benchmarking import benchmarker
 from .coordinate_descent_tuner import CoordescTuner
 from .hints import (
     _NUM_THREADS_PER_WARP,
@@ -33,7 +34,6 @@ from .runtime_utils import (
     ceildiv,
     conditional_product,
     create_bandwidth_info_str,
-    do_bench_gpu,
     dynamo_timed,
     get_first_attr,
     get_max_y_grid,
@@ -628,7 +628,7 @@ class CachingAutotuner(KernelInterface):
 
         return binary, launcher
 
-    def bench(self, launcher, *args, grid, **kwargs):
+    def bench(self, launcher, *args, grid, lazy=False, **kwargs):
         """Measure the performance of a given launcher"""
         # we don't skip configs wiht spilled registers when auto-tuning custom
         # (user-written) Triton kernels, as (i) we don't have any knowledge or
@@ -664,7 +664,11 @@ class CachingAutotuner(KernelInterface):
                 stream=stream,
             )
 
-        return do_bench_gpu(kernel_call, rep=40, fast_flush=True)
+        if lazy:
+            return benchmarker.lazy_benchmark_gpu(
+                kernel_call, ranking_key=f"bench [{hash(self)}]"
+            )
+        return benchmarker.benchmark_gpu(kernel_call)
 
     def clone_args(self, *args, **kwargs) -> Tuple[List[Any], Dict[str, Any]]:
         from ..compile_fx import clone_preserve_strides
@@ -692,9 +696,12 @@ class CachingAutotuner(KernelInterface):
 
     @dynamo_timed
     def benchmark_all_configs(self, *args, **kwargs):
+        lazy_benchmarks = [
+            self.bench(launcher, *args, **kwargs) for launcher in self.launchers
+        ]
         timings = {
-            launcher: self.bench(launcher, *args, **kwargs)
-            for launcher in self.launchers
+            launcher: float(timing)
+            for launcher, timing in zip(self.launchers, lazy_benchmarks)
         }
 
         for k, v in timings.items():

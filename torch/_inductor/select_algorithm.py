@@ -40,8 +40,8 @@ from .codegen.triton import (
 from .codegen.triton_utils import config_of, signature_to_meta
 from .exc import CUDACompileError
 from .ir import ChoiceCaller, PrimitiveInfoType
+from .runtime.benchmarking import benchmarker
 from .runtime.hints import DeviceProperties
-from .runtime.runtime_utils import do_bench
 from .utils import (
     FakeIndentedBuffer,
     get_dtype_size,
@@ -867,9 +867,9 @@ class TritonTemplateCaller(ir.TritonTemplateCallerBase):
         )
         self.mutated_inputs = mutated_inputs
 
-    def benchmark(self, *args, out):
+    def benchmark(self, *args, out, lazy=False):
         assert self.bmreq is not None
-        return self.bmreq.benchmark(*args, output_tensor=out)
+        return self.bmreq.benchmark(*args, output_tensor=out, lazy=lazy)
 
     def precompile(self):
         assert self.bmreq is not None
@@ -939,7 +939,7 @@ class ExternKernelCaller(ChoiceCaller):
     def __str__(self):
         return f"ExternKernelCaller({self.choice.call_name()})"
 
-    def benchmark(self, *args, out):
+    def benchmark(self, *args, out, lazy=False):
         if out.numel() == 0:
             # no need to run the kerrnel of do benchmarking
             return 0.0
@@ -952,7 +952,12 @@ class ExternKernelCaller(ChoiceCaller):
                 out_new, tuple(out.size()), tuple(out.stride())
             )
             out.copy_(out_new)  # for correctness checking
-            return do_bench(algo, args, {})
+            if lazy:
+                return benchmarker.lazy_benchmark(
+                    algo, args, {}, pruning_key="max-autotune-gemm"
+                )
+
+            return benchmarker.benchmark(algo, args, {})
 
     def to_callable(self):
         fn = self.choice.to_callable()
@@ -1051,7 +1056,7 @@ class DataProcessorChoiceCallerWrapper:
     def __getattr__(self, name):
         return getattr(self._wrapped, name)
 
-    def benchmark(self, *args, out) -> float:
+    def benchmark(self, *args, out, lazy=False) -> float:
         new_args, new_out = self._preprocessor(args, out)
         result = self._wrapped.benchmark(*new_args, out=new_out)
         new_out = self._postprocessor(new_out)
@@ -1470,34 +1475,37 @@ class AlgorithmSelectorCache(PersistentCache):
             choice, example_inputs, example_inputs_extern, out, out_extern, expected
         ):
             out.zero_()
+            # we can't postpone benchmarking if we need to verify the results
+            lazy = not ((VERIFY != {}) and (expected is not None))
             if isinstance(choice, ExternKernelCaller):
                 # aten kernels want the offset baked in for sliced tensors
-                result = choice.benchmark(*example_inputs_extern, out=out_extern)
+                result = choice.benchmark(
+                    *example_inputs_extern, out=out_extern, lazy=lazy
+                )
             else:
                 # triton templates want the base pointer for sliced tensors
-                result = choice.benchmark(*example_inputs, out=out)
+                result = choice.benchmark(*example_inputs, out=out, lazy=lazy)
             if VERIFY and expected is not None:
                 torch.testing.assert_close(out_extern, expected, **VERIFY)
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()  # shake out any CUDA errors
             return result
 
         def benchmark_in_current_process(choices):
             inputs = get_inputs()
-            example_inputs, _, out, _, _ = inputs
-            timings = {}
+            choice_to_timing_ms, choice_to_maybe_lazy_benchmark = {}, {}
             for choice in choices:
                 try:
-                    timing = benchmark_choice_in_current_process(choice, *inputs)
+                    choice_to_maybe_lazy_benchmark[
+                        choice
+                    ] = benchmark_choice_in_current_process(choice, *inputs)
                 except CUDACompileError as e:
                     log.error(
                         "CUDA compilation error during autotuning: \n%s. \nIgnoring this choice.",
                         str(e),
                     )
-                    timing = float("inf")
+                    choice_to_timing_ms[choice] = float("inf")
                 except NotImplementedError as e:
                     log.warning("Not yet implemented: %s", e)
-                    timing = float("inf")
+                    choice_to_timing_ms[choice] = float("inf")
                 except RuntimeError as e:
                     msg = str(e)
                     if "invalid argument" in msg:
@@ -1509,7 +1517,7 @@ class AlgorithmSelectorCache(PersistentCache):
                         "Runtime error during autotuning: \n%s. \nIgnoring this choice.",
                         msg,
                     )
-                    timing = float("inf")
+                    choice_to_timing_ms[choice] = float("inf")
                 except AssertionError as e:
                     raise AssertionError(  # noqa: B904
                         f"Incorrect result from choice {choice}\n\n{e}"
@@ -1520,15 +1528,19 @@ class AlgorithmSelectorCache(PersistentCache):
 
                         if isinstance(e, OutOfResources):
                             log.warning(e)
-                            timing = float("inf")
+                            choice_to_timing_ms[choice] = float("inf")
                         else:
                             raise e
                     except ImportError:
                         raise e from None
 
-                timings[choice] = timing
-
-            return timings
+            choice_to_timing_ms.update(
+                {
+                    choice: float(maybe_lazy_benchmark)
+                    for choice, maybe_lazy_benchmark in choice_to_maybe_lazy_benchmark.items()
+                }
+            )
+            return choice_to_timing_ms
 
         def benchmark_in_sub_process(choices):
             from . import autotune_process

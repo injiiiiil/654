@@ -8,7 +8,7 @@ from torch._inductor.metrics import get_metric_table, is_metric_table_enabled
 
 from .. import config
 from ..codecache import get_path, TritonFuture
-from ..runtime.runtime_utils import do_bench_gpu
+from ..runtime.benchmarking import benchmarker
 from ..utils import cache_on_self, IndentedBuffer
 from ..virtualized import V
 from .common import TensorArg
@@ -321,10 +321,10 @@ class MultiKernelCall:
 
             return inner
 
-        return [
-            do_bench_gpu(wrap_fn(kernel), rep=40, fast_flush=True)
-            for kernel in self.kernels
-        ]
+        return benchmarker.benchmark_many_gpu(
+            [wrap_fn(kernel) for kernel in self.kernels],
+            ranking_key=f"benchmark_sub_kernels_{self.multi_kernel_name}",
+        )
 
     # record_choice and lookup_choice are helper functions for cpp-wrapper
     # codegen. The first pass use record_choice to keep the choice and

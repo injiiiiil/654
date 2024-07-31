@@ -1,6 +1,6 @@
 # mypy: allow-untyped-defs
 import itertools
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, cast, Dict, List, Optional, Tuple, Union
 
 import sympy
 from sympy.parsing.sympy_parser import parse_expr
@@ -343,9 +343,9 @@ class CppTemplateCaller(ir.ChoiceCaller):
         assert self.bmreq is not None
         self.bmreq.precompile()
 
-    def benchmark(self, *args, out) -> float:
+    def benchmark(self, *args, out, lazy=False) -> float:
         assert self.bmreq is not None
-        return self.bmreq.benchmark(*args, output_tensor=out)
+        return cast(float, self.bmreq.benchmark(*args, output_tensor=out))
 
     def hash_key(self) -> str:
         return "-".join(

@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from torch._inductor.select_algorithm import TritonTemplateCaller
 
 from . import config
-from .runtime.runtime_utils import do_bench_cpu, do_bench_gpu
+from .runtime.benchmarking import benchmarker, LazyBenchmark
 from .virtualized import V
 
 
@@ -510,14 +510,16 @@ class BenchmarkRequest:
         fn,
         *input_tensors: torch.Tensor,
         output_tensor: Optional[torch.Tensor] = None,
-    ) -> float:
+        lazy: bool = False,
+    ) -> Union[LazyBenchmark, float]:
         raise NotImplementedError
 
     def benchmark(
         self,
         *input_tensors: torch.Tensor,
         output_tensor: Optional[torch.Tensor] = None,
-    ) -> float:
+        lazy: bool = False,
+    ) -> Union[LazyBenchmark, float]:
         debug = log.isEnabledFor(logging.DEBUG)
         if debug:
             start_ts = time.time()
@@ -542,7 +544,7 @@ class BenchmarkRequest:
             load_elapse = time.time() - start_ts  # type: ignore[possibly-undefined]
             start_ts = time.time()
 
-        out = self.do_bench(fn, *input_tensors, output_tensor)
+        out = self.do_bench(fn, *input_tensors, output_tensor, lazy=lazy)
 
         if debug:
             bench_elapse = time.time() - start_ts  # type: ignore[possibly-undefined]
@@ -567,7 +569,10 @@ class TestBenchmarkRequest(BenchmarkRequest):
         self.value = value
 
     def benchmark(
-        self, *input_tensors: torch.Tensor, output_tensor: Optional[torch.Tensor] = None
+        self,
+        *input_tensors: torch.Tensor,
+        output_tensor: Optional[torch.Tensor] = None,
+        lazy=False,
     ) -> float:
         if self.value is None:
             raise Exception("Failed to run")  # noqa: TRY002
@@ -580,7 +585,8 @@ class GPUDeviceBenchmarkRequest(BenchmarkRequest):
         fn,
         *input_tensors: torch.Tensor,
         output_tensor: Optional[torch.Tensor] = None,
-    ) -> float:
+        lazy: bool = False,
+    ) -> Union[LazyBenchmark, float]:
         device_idx_set = {
             tensor.device.index
             for tensor in [*input_tensors, output_tensor]
@@ -595,8 +601,12 @@ class GPUDeviceBenchmarkRequest(BenchmarkRequest):
             device_idx = torch.cuda.current_device()
 
         with torch.cuda.device(device_idx):
-            out = do_bench_gpu(fn)
-            torch.cuda.synchronize()  # shake out any CUDA errors
+            if lazy:
+                out = benchmarker.lazy_benchmark_gpu(
+                    fn, pruning_key="max-autotune-gemm"
+                )
+            else:
+                out = benchmarker.benchmark_gpu(fn)
 
         return out
 
@@ -800,8 +810,9 @@ class CPUDeviceBenchmarkRequest(BenchmarkRequest):
         fn,
         *input_tensors: torch.Tensor,
         output_tensor: Optional[torch.Tensor] = None,
+        lazy: bool = False,
     ) -> float:
-        return do_bench_cpu(fn)
+        return benchmarker.benchmark_cpu(fn)
 
 
 class CppBenchmarkRequest(CPUDeviceBenchmarkRequest):

@@ -69,8 +69,8 @@ from .dependencies import (
     var_builder,
 )
 from .ops_handler import OpCounterCSE
+from .runtime.benchmarking import benchmarker, LazyBenchmark
 from .runtime.hints import ReductionHint
-from .runtime.runtime_utils import do_bench
 from .utils import (
     argsort,
     cache_on_self,
@@ -3891,9 +3891,14 @@ class ChoiceCaller:
         self.layout = layout
         self.input_nodes = input_nodes
 
-    def benchmark(self, *args, out) -> float:
+    def benchmark(self, *args, out, lazy=False) -> Union[LazyBenchmark, float]:
         algo = self.to_callable()
-        return do_bench(algo, args, {"out": out})
+        if lazy:
+            return benchmarker.lazy_benchmark(
+                algo, args, {"out": out}, pruning_key="max-autotune-gemm"
+            )
+
+        return benchmarker.benchmark(algo, args, {"out": out})
 
     def call_name(self) -> str:
         raise NotImplementedError
