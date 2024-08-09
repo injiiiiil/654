@@ -10893,6 +10893,37 @@ class CommonTemplate:
         _, code = run_and_get_code(fn, x, x2)
         FileCheck().check("aten.view.dtype(reinterpret_tensor").run(code[0])
 
+    @skip_if_halide  # need to fix
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
+    def test_tensor_item(self):
+        def fn(x):
+            return x.sum().item()
+
+        def fn2(x, y):
+            a = x.sum().item() + 1
+            return y + a
+
+        x = torch.rand([20], device=self.device)
+        y = torch.rand([4], device=self.device)
+        self.common(fn, (x,), check_lowp=False)
+        self.common(fn2, (x, y), check_lowp=False)
+
+    @skipIfXpu
+    @requires_gpu()
+    def test_scalar_cpu_tensor_arg(self):
+        def fn(x, y):
+            return x + y.sum()
+        test_dtypes = [
+            torch.float32,
+            torch.float64,
+            torch.float16,
+            torch.bfloat16,
+        ]
+        for cpu_dtype in test_dtypes:
+            x = torch.rand([20], device="cuda")
+            y = torch.rand([4], device="cpu", dtype=cpu_dtype)
+            self.common(fn, (x, y), check_lowp=False)
+
     def test_float16_to_int16(self):
         def fn(x):
             x_view = x.view(dtype=torch.int16)

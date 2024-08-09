@@ -2556,8 +2556,15 @@ class CppPythonBindingsCodeCache(CppCodeCache):
         static void* (*_torchinductor_pyobject_tensor_data_ptr)(PyObject* obj);
 
         template <typename T> static inline T parse_arg(PyObject* args, size_t n) {
-            static_assert(std::is_pointer<T>::value, "arg type must be pointer or long");
+            static_assert(std::is_pointer<T>::value, "arg type must be pointer, long, or float");
             return static_cast<T>(_torchinductor_pyobject_tensor_data_ptr(PyTuple_GET_ITEM(args, n)));
+        }
+        template <> inline double parse_arg<double>(PyObject* args, size_t n) {
+            auto result = PyFloat_AsDouble(PyTuple_GET_ITEM(args, n));
+            if (result == -1.0 && PyErr_Occurred()) {
+                throw std::runtime_error("expected float arg");
+            }
+            return static_cast<double>(result);
         }
         template <> inline long parse_arg<long>(PyObject* args, size_t n) {
             auto result = PyLong_AsSsize_t(PyTuple_GET_ITEM(args, n));
