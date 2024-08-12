@@ -100,6 +100,7 @@ from torch._inductor.utils import (
     BoxedBool,
     clear_on_fresh_inductor_cache,
     is_linux,
+    is_windows,
     set_tracing_context_output_strides,
 )
 from torch._logging import trace_structured
@@ -2000,16 +2001,16 @@ def custom_op_wrapper(op: str, *args: Any) -> Union[list[c_void_p], c_void_p]:
 
 @clear_on_fresh_inductor_cache
 class CppCodeCache:
-    cache: Dict[str, Callable[[], Union[CDLL, ModuleType]]] = {}
+    cache: Dict[str, Callable[[], Union[DLLWrapper, ModuleType]]] = {}
     cache_clear = staticmethod(cache.clear)
     cpp_compile_command_flags: Dict[str, Any] = {}
 
     @staticmethod
-    def _load_library_inner(path: str, key: str) -> Union[CDLL, ModuleType]:
-        return cdll.LoadLibrary(path)
+    def _load_library_inner(path: str, key: str) -> Union[DLLWrapper, ModuleType]:
+        return DLLWrapper(path)
 
     @classmethod
-    def _load_library(cls, path: str, key: str) -> Union[CDLL, ModuleType]:
+    def _load_library(cls, path: str, key: str) -> Union[DLLWrapper, ModuleType]:
         try:
             result = cls._load_library_inner(path, key)
             result.key = key  # type: ignore[union-attr]
@@ -2145,7 +2146,7 @@ def _worker_compile_cpp(
 # Customized Python binding for cpp kernels
 @clear_on_fresh_inductor_cache
 class CppPythonBindingsCodeCache(CppCodeCache):
-    cache: Dict[str, Callable[[], Union[CDLL, ModuleType]]] = {}
+    cache: Dict[str, Callable[[], Union[DLLWrapper, ModuleType]]] = {}
     cache_clear = staticmethod(cache.clear)
     cpp_compile_command_flags = {
         # kernels have no dependency on libtorch
@@ -2311,7 +2312,7 @@ class CppPythonBindingsCodeCache(CppCodeCache):
 
 @clear_on_fresh_inductor_cache
 class CppWrapperCodeCache(CppPythonBindingsCodeCache):
-    cache: Dict[str, Callable[[], Union[CDLL, ModuleType]]] = {}
+    cache: Dict[str, Callable[[], Union[DLLWrapper, ModuleType]]] = {}
     cache_clear = staticmethod(cache.clear)
     cpp_compile_command_flags = {
         "include_pytorch": True,
@@ -2374,7 +2375,7 @@ class CppWrapperCodeCache(CppPythonBindingsCodeCache):
 
 @clear_on_fresh_inductor_cache
 class HalideCodeCache(CppPythonBindingsCodeCache):
-    cache: Dict[str, Callable[[], Union[ModuleType, CDLL]]] = {}
+    cache: Dict[str, Callable[[], Union[ModuleType, DLLWrapper]]] = {}
     cache_clear = staticmethod(cache.clear)
     _standalone_runtime_path: Optional[str] = None
     prefix = textwrap.dedent(
@@ -3017,12 +3018,23 @@ class DLLWrapper:
 
             if hasattr(syms, "dlclose"):
                 f_dlclose = syms.dlclose
+        elif is_windows():
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.CDLL("kernel32", use_last_error=True)
+            kernel32.FreeLibrary.argtypes = [wintypes.HMODULE]
+
+            f_dlclose = kernel32.FreeLibrary
         else:
             raise NotImplementedError("Unsupported env, failed to do dlclose!")
 
         if f_dlclose is not None:
-            f_dlclose.argtypes = [c_void_p]
-            f_dlclose(self.DLL._handle)
+            if is_linux():
+                f_dlclose.argtypes = [c_void_p]
+                f_dlclose(self.DLL._handle)
+            elif is_windows():
+                f_dlclose(self.DLL._handle)
         else:
             log.warning(
                 "dll unloading function was not found, library may not be unloaded properly!"
