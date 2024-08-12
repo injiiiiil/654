@@ -100,6 +100,7 @@ from torch._inductor.utils import (
     BoxedBool,
     clear_on_fresh_inductor_cache,
     is_linux,
+    is_windows,
     set_tracing_context_output_strides,
 )
 from torch._logging import trace_structured
@@ -2142,6 +2143,51 @@ def _worker_compile_cpp(
                 cpp_builder.build()
 
 
+def CppCodeBuilder(
+    source_code: str,
+    cuda: bool = False,
+    extra_flags: Sequence[str] = (),
+) -> str:
+    from filelock import FileLock
+
+    cpp_compile_command_flags: Dict[str, Any] = {}
+    compile_command = {
+        **cpp_compile_command_flags,
+        "cuda": cuda,
+        "vec_isa": pick_vec_isa(),
+        "extra_flags": extra_flags,
+    }
+
+    _set_gpu_runtime_env()  # cpp_extension consults the env
+
+    command_gen = CppBuilder(
+        name="o", sources="i", BuildOption=CppTorchCudaOptions(**compile_command)
+    )
+    # write function will calc source_code hash, the same source code with different
+    # ISA level should be generate different hash.
+    # So we need get a command_line which contains isa related parameter as a part of hash key.
+    # And then pass the command_line to below write function as extra parameter to
+    # guarantee the source code hash contains ISA difference.
+    vec_isa_cmd = repr(command_gen.get_command_line())
+    key, input_path = write(source_code, "cpp", extra=vec_isa_cmd)
+
+    lock_path = os.path.join(get_lock_dir(), key + ".lock")
+    output_name, output_dir = get_name_and_dir_from_output_file_path(input_path)
+
+    cpp_build_option = CppTorchCudaOptions(**compile_command)
+    cpp_builder = CppBuilder(
+        name=output_name,
+        sources=input_path,
+        output_dir=output_dir,
+        BuildOption=cpp_build_option,
+    )
+
+    with FileLock(lock_path, timeout=LOCK_TIMEOUT):
+        cpp_builder.build()
+
+    return cpp_builder.get_target_file_path()
+
+
 # Customized Python binding for cpp kernels
 @clear_on_fresh_inductor_cache
 class CppPythonBindingsCodeCache(CppCodeCache):
@@ -3017,12 +3063,23 @@ class DLLWrapper:
 
             if hasattr(syms, "dlclose"):
                 f_dlclose = syms.dlclose
+        elif is_windows():
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.CDLL("kernel32", use_last_error=True)
+            kernel32.FreeLibrary.argtypes = [wintypes.HMODULE]
+
+            f_dlclose = kernel32.FreeLibrary
         else:
             raise NotImplementedError("Unsupported env, failed to do dlclose!")
 
         if f_dlclose is not None:
-            f_dlclose.argtypes = [c_void_p]
-            f_dlclose(self.DLL._handle)
+            if is_linux():
+                f_dlclose.argtypes = [c_void_p]
+                f_dlclose(self.DLL._handle)
+            elif is_windows():
+                f_dlclose(self.DLL._handle)
         else:
             log.warning(
                 "dll unloading function was not found, library may not be unloaded properly!"
