@@ -3148,15 +3148,15 @@ class Scheduler:
         with dynamo_timed("Scheduler.codegen"):
             return self._codegen()
 
-    def get_traning_phase(self) -> str:
-        if V.is_inference:
+    def get_training_phase(self) -> str:
+        if V.graph.is_inference:
             return "inference"
-        if V.is_backward:
+        if V.graph.is_backward:
             return "backward"
         return "forward"
 
     def _codegen(self) -> None:
-        phase = self.get_traning_phase()
+        phase = self.get_training_phase()
         if config.annotate_training:
             V.graph.wrapper_code.writeline(f"training_annotation = nvtx.device_range_start('{phase}')")
         for node in self.nodes:
