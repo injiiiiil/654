@@ -20,7 +20,12 @@ from torch._guards import Source
 from torch._library.fake_class_registry import FakeScriptObject
 from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.export import Constraint
-from torch.export.dynamic_shapes import _tree_map_with_path
+from torch.export.dynamic_shapes import (
+    _combine_args,
+    _process_dynamic_shapes,
+    _sanity_check_shapes_spec,
+    _tree_map_with_path,
+)
 from torch.export.graph_signature import CustomObjArgument
 from torch.fx.experimental.symbolic_shapes import (
     ConstraintViolationError,
@@ -80,7 +85,7 @@ def fakify(
         raise ValueError(f"Unsupported input type {type(t)}")
     n_dims = len(t.shape)
     symbolic_context = StatelessSymbolicContext(
-        dynamic_sizes=[DimDynamic.STATIC] * n_dims,
+        dynamic_sizes=[DimDynamic.DYNAMIC] * n_dims,
         constraint_sizes=[None] * n_dims,
     )
     t_id = id(t)
@@ -88,7 +93,7 @@ def fakify(
     if t_id in t_constraints:
         for i, constraint in t_constraints[t_id].items():
             symbolic_context.constraint_sizes[i] = constraint.constraint_range
-            symbolic_context.dynamic_sizes[i] = DimDynamic.DYNAMIC
+            # symbolic_context.dynamic_sizes[i] = DimDynamic.DYNAMIC
             src = TensorPropertySource(base=source, prop=TensorProperty.SIZE, idx=i)
             sources[(t_id, i)].append(src)
             mode.shape_env.source_name_to_debug_name[src.name()] = constraint.debug_name  # type: ignore[assignment]
@@ -119,10 +124,13 @@ def make_fake_inputs(
     # In strict, these steps are spread across multiple files:
     #   - output_graph.py fakifies inputs.
     #   - [post-tracing] guards.py processes input shape equalities.
+    from torch.export.dynamic_shapes import _combine_args, _process_dynamic_shapes
 
-    constraints = torch.export.dynamic_shapes._process_dynamic_shapes(
-        nn_module, args, kwargs, dynamic_shapes, _is_torch_jit_trace=_is_torch_jit_trace
+    combined_args = _combine_args(
+        f, args, kwargs, dynamic_shapes, _is_torch_jit_trace=_is_torch_jit_trace
     )
+    _sanity_check_shapes_spec(combined_args, dynamic_shapes)
+    constraints = _process_dynamic_shapes(combined_args, dynamic_shapes)
     constraints = constraints or []
     t_constraints: Dict[int, Dict[int, Constraint]] = defaultdict(dict)
     for constraint in constraints:
@@ -134,11 +142,7 @@ def make_fake_inputs(
     if context is not None:
         # This occurs when we are exporting within dynamo. There already exists
         # a toplevel TracingContext with a fake mode, so we do not want to
-        # create another fake mode. In this scenario, we also shouldn't have any
-        # constraints since the toplevel tracing context should handle it.
-        assert (
-            len(constraints) == 0
-        ), "Found constraints when tracing with a toplevel tracing context."
+        # create another fake mode.
         fake_mode = context.fake_mode
     elif not _is_torch_jit_trace:
         code = nn_module.forward.__code__
@@ -302,13 +306,14 @@ def make_constraints(
         num_lifted_inputs: the number of non-user-input placeholder nodes in the graph
         (used only to enumerate the user-input nodes)
     """
+    import sympy
 
     shape_env = fake_mode.shape_env
     assert shape_env is not None
     inline_constraints = gm.meta.get("inline_constraints", [])
     range_constraints = {
         symbol: inline_constraints[symbol] for symbol in inline_constraints
-    }
+    }  # we should probably clean up range constraints for symbols that don't appear in the graph
     if not dynamic_shapes:
         return range_constraints
 
@@ -332,24 +337,30 @@ def make_constraints(
         ):
             continue
         shape_spec = flat_dynamic_shapes[input_index - num_lifted_inputs]
+        """
+        This ordering is actually wrong, on how we process things
+        With kwargs they get flipped. Figure this out later.
+        """
         for i, d in enumerate(node.meta["val"].shape):
-            if isinstance(d, torch.SymInt):
+            if (
+                isinstance(d, torch.SymInt)
+                and isinstance(expr := d.node.expr, sympy.Expr)
+                and not isinstance(expr, sympy.Number)
+            ):
                 # Look up the range constraint for the symbol corresponding to this shape dimension
                 # and store it indexed by the symbolic expression corresponding to it.
-                # NOTE(avik): Use node._expr instead of node.expr for the lookup here because
-                # we want the symbol, not its replacement, which could be an expression. Maybe
-                # there's a better way to do this, e.g., by (re)computing value ranges for expressions?
-                dim = shape_spec[i] if shape_spec else None
+                dim = None if (shape_spec[i] is None or shape_spec[i] == True) else shape_spec[i]
                 if dim:
-                    range_constraints[d.node.expr] = ValueRanges(
+                    range_constraints[expr] = ValueRanges(
                         lower=dim.min, upper=dim.max
                     )
                 else:
-                    range_constraints[d.node.expr] = shape_env.var_to_range[
-                        d.node._expr
-                    ]
-                input_dims[d.node.expr].append(InputDim(input_name=node.name, dim=i))
-                free_symbols.update(d.node.expr.free_symbols)
+                    # NOTE(avik): Use node._expr instead of node.expr for the lookup here because
+                    # we want the symbol, not its replacement, which could be an expression. Maybe
+                    # there's a better way to do this, e.g., by (re)computing value ranges for expressions?
+                    range_constraints[expr] = shape_env.var_to_range[d.node._expr]
+                input_dims[expr].append(InputDim(input_name=node.name, dim=i))
+                free_symbols.update(expr.free_symbols)
 
     for symbol in free_symbols:
         if symbol not in range_constraints:

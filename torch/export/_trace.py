@@ -552,7 +552,7 @@ def _export_to_torch_ir(
                 gm_torch_level, _ = torch._dynamo.export(
                     f,
                     dynamic_shapes=dynamic_shapes,  # type: ignore[arg-type]
-                    assume_static_by_default=True,
+                    assume_static_by_default=False,
                     tracing_mode="symbolic",
                     disable_constraint_solver=disable_constraint_solver,
                     # currently the following 2 flags are tied together for export purposes,
@@ -561,6 +561,7 @@ def _export_to_torch_ir(
                     allow_complex_guards_as_runtime_asserts=allow_complex_guards_as_runtime_asserts,
                     _log_export_usage=_log_export_usage,
                     same_signature=same_signature,
+                    # automatic_dynamic_shapes=True,
                 )(
                     *args,
                     **kwargs,
@@ -1898,18 +1899,22 @@ def _export_for_training(
             dispatch_tracing_mode="make_fx",
         )
     )
-    export_artifact = export_func(  # type: ignore[operator]
-        mod=mod,
-        args=args,
-        kwargs=kwargs,
-        dynamic_shapes=dynamic_shapes,
-        preserve_module_call_signature=preserve_module_call_signature,
-        pre_dispatch=False,
-        original_state_dict=original_state_dict,
-        orig_in_spec=orig_in_spec,
-        allow_complex_guards_as_runtime_asserts=False,
-        _is_torch_jit_trace=False,
-    )
+    with torch._dynamo.config.patch(
+        assume_static_by_default=False,
+        automatic_dynamic_shapes=True,
+    ):
+        export_artifact = export_func(  # type: ignore[operator]
+            mod=mod,
+            args=args,
+            kwargs=kwargs,
+            dynamic_shapes=dynamic_shapes,
+            preserve_module_call_signature=preserve_module_call_signature,
+            pre_dispatch=False,
+            original_state_dict=original_state_dict,
+            orig_in_spec=orig_in_spec,
+            allow_complex_guards_as_runtime_asserts=False,
+            _is_torch_jit_trace=False,
+        )
 
     export_graph_signature = export_artifact.aten.sig
 
