@@ -21,11 +21,21 @@ class InductorAnnotationTestCase(TestCase):
         return code[0]
 
 
+    @requires_cuda
+    def test_no_annotations(self):
+        code = self.get_code()
+
+        self.assertTrue("from torch.cuda import nvtx" not in code)
+        self.assertTrue("buffer_annotation" not in code)
+        self.assertTrue("training_annotation" not in code)
+
+
     @inductor_config.patch(annotate_training=True)
     @requires_cuda
     def test_training_annotation(self):
         code = self.get_code()
 
+        self.assertTrue("from torch.cuda import nvtx" in code)
         self.assertEqual(code.count("training_annotation = nvtx.device_range_start('inference')"), 1)
         self.assertEqual(code.count("nvtx.device_range_end(training_annotation)"), 1)
         self.assertTrue("buffer_annotation" not in code)
@@ -36,6 +46,7 @@ class InductorAnnotationTestCase(TestCase):
     def test_buffer_annotation(self):
         code = self.get_code()
 
+        self.assertTrue("from torch.cuda import nvtx" in code)
         self.assertEqual(code.count("buffer_annotation = nvtx.device_range_start"), 1)
         self.assertEqual(code.count("nvtx.device_range_end(buffer_annotation)"), 1)
         self.assertTrue("training_annotation" not in code)
@@ -50,6 +61,7 @@ class InductorAnnotationTestCase(TestCase):
         with mock.patch.object(Scheduler, "fuse_nodes", no_fusion):
             code = self.get_code()
 
+            self.assertTrue("from torch.cuda import nvtx" in code)
             self.assertEqual(code.count("buffer_annotation = nvtx.device_range_start"), 2)
             self.assertEqual(code.count("nvtx.device_range_end(buffer_annotation)"), 2)
             self.assertTrue("training_annotation" not in code)
@@ -60,6 +72,7 @@ class InductorAnnotationTestCase(TestCase):
     def test_buffer_and_training_annotation(self):
         code = self.get_code()
 
+        self.assertTrue("from torch.cuda import nvtx" in code)
         self.assertEqual(code.count("training_annotation = nvtx.device_range_start('inference')"), 1)
         self.assertEqual(code.count("nvtx.device_range_end(training_annotation)"), 1)
         self.assertEqual(code.count("buffer_annotation = nvtx.device_range_start"), 1)

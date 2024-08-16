@@ -554,7 +554,6 @@ class WrapperCodeGen(CodeGen):
                 import random
                 import os
                 import tempfile
-                from torch.cuda import nvtx
                 from math import inf, nan
                 from torch._inductor.hooks import run_intermediate_hooks
                 from torch._inductor.utils import maybe_profile
@@ -581,6 +580,8 @@ class WrapperCodeGen(CodeGen):
             """,
             strip=True,
         )
+        if config.annotate_training or config.annotate_buffers:
+            self.header.writeline("from torch.cuda import nvtx")
 
     def write_kernel_autotune_defs_header(self) -> None:
         self.kernel_autotune_defs.splice(
