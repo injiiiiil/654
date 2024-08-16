@@ -23,8 +23,8 @@ static void device_callback_range_end(void* userData) {
   free((void*)handle);
 }
 
-static void device_nvtxRangeEnd(void* handle) {
-  cudaLaunchHostFunc(0, device_callback_range_end, handle);
+static void device_nvtxRangeEnd(void* handle, std::intptr_t stream) {
+  cudaLaunchHostFunc((cudaStream_t)stream, device_callback_range_end, handle);
 }
 
 static void device_callback_range_start(void* userData) {
@@ -32,11 +32,12 @@ static void device_callback_range_start(void* userData) {
   handle->id = nvtxRangeStartA(handle->msg);
 }
 
-static void* device_nvtxRangeStart(const char* msg) {
+static void* device_nvtxRangeStart(const char* msg, std::intptr_t stream) {
   RangeHandle* handle = (RangeHandle*)calloc(sizeof(RangeHandle), 1);
   handle->msg = strdup(msg);
   handle->id = 0;
-  cudaLaunchHostFunc(0, device_callback_range_start, (void*)handle);
+  cudaLaunchHostFunc(
+      (cudaStream_t)stream, device_callback_range_start, (void*)handle);
   return handle;
 }
 
