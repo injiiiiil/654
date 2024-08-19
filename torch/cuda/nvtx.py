@@ -66,7 +66,7 @@ def range_end(range_id) -> None:
     _nvtx.rangeEnd(range_id)
 
 
-def device_range_start(msg, stream=0) -> int:
+def device_range_start(msg: str, stream: int=0) -> object:
     """
     Marks the start of a range with string message.
     It returns an opaque heap-allocated handle for this range
@@ -85,7 +85,7 @@ def device_range_start(msg, stream=0) -> int:
     return _nvtx.deviceRangeStart(msg, stream)
 
 
-def device_range_end(range_handle, stream=0) -> None:
+def device_range_end(range_handle: object, stream: int=0) -> None:
     """
     Mark the end of a range for a given range_handle as soon as all the tasks
     on the CUDA stream are completed.
