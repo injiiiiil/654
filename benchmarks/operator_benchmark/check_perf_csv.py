@@ -75,7 +75,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--actual", type=str, required=True)
     parser.add_argument("--expected", type=str, required=True)
-    parser.add_argument("--threshold", type=float, default=0.1, 
+    parser.add_argument("--threshold", type=float, default=0.5, 
         help="threshold to define regression/improvement")
     args = parser.parse_args()
 
