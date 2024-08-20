@@ -1417,7 +1417,7 @@ test_operator_benchmark() {
   python setup.py install
 
   cd "${TEST_DIR}"/benchmarks/operator_benchmark
-  taskset -c 0-"$end_core" python -m benchmark_all_test --device cpu --output-dir "${TEST_REPORTS_DIR}/operator_benchmark_eager_float32_cpu.csv"
+  taskset -c 0-"$end_core" python -m benchmark_all_test --device cpu --tag_filter all --output-dir "${TEST_REPORTS_DIR}/operator_benchmark_eager_float32_cpu.csv"
 
   cd "${TEST_DIR}"/benchmarks/operator_benchmark
   pip_install pandas
