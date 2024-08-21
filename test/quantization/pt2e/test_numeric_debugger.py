@@ -20,7 +20,11 @@ from torch.ao.quantization.quantizer.xnnpack_quantizer import (
     XNNPACKQuantizer,
 )
 from torch.testing._internal.common_quantization import TestHelperModules
-from torch.testing._internal.common_utils import IS_WINDOWS, TestCase
+from torch.testing._internal.common_utils import (
+    IS_WINDOWS,
+    raise_on_run_directly,
+    TestCase,
+)
 
 
 def _extract_debug_handles(model) -> Dict[torch.fx.Node, int]:
@@ -162,3 +166,7 @@ class TestNumericDebugger(TestCase):
         for node_summary in comparison_results.values():
             if len(node_summary.results) > 0:
                 self.assertGreaterEqual(node_summary.results[0].sqnr, 35)
+
+
+if __name__ == "__main__":
+    raise_on_run_directly("test/test_quantization.py")
