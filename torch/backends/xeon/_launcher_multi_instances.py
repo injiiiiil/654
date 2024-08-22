@@ -14,17 +14,12 @@ from ._launcher_base import Launcher
 
 
 class MultiInstancesLauncher(Launcher):
-    """
-    Launcher for single instance and multi-instance
-    """
-
     def __init__(self, logger=None, lscpu_txt=""):
         super().__init__(logger, lscpu_txt)
         self.tm_supported = ["auto", "none", "numactl", "taskset"]
 
     def add_params(self, parser):
         group = parser.add_argument_group("Multi-instance Arguments")
-        # multi-instance control
         group.add_argument(
             "--ninstances",
             default=0,
@@ -110,9 +105,6 @@ class MultiInstancesLauncher(Launcher):
         return is_available
 
     def set_multi_task_manager(self, multi_task_manager="auto", skip_list=None):
-        """
-        Set multi-task manager
-        """
         if skip_list is None:
             skip_list = []
         tm_bin_name = {

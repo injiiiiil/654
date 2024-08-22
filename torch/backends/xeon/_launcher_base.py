@@ -160,23 +160,18 @@ class Launcher:
         The support list is formed in format ['auto', default choice, alternative A, alternative B, ...].
         The list can only contain 'auto' and the default choice.
         Arguments:
-            name_input: name of the lib/bin that user inputs.
-            name_map: a dictionary. {'key': ['alias name', 'package installation command']} Its key is name of the
-            lib/bin, its value is a list of string with 2 elements. First string of the list is alias name of the
-            lib/bin that is searched in the system. For instance, when key is 'intel' for OpenMP runtime, the function
-            will invoke fn (describe below) to search a library file 'libiomp5.so'.
-            The fn function passed forms the library file name with its identifier 'iomp5'. Thus, the first string of
-            this list for key 'intel' should be 'iomp5'. This value depends on how fn function searches for the lib/bin
-            file.
-            The second string should be a installation command guides users to install this package. When it is empty,
-            the installation guide will not be prompted. category: category of this lib/bin. 'memory allocator',
-            'multi-task manager', etc.
-            supported: predefined support list
-            fn: a function how the lib/bin files will be searched. Return True to indicate a successful searching,
-            otherwise return False.
-            skip_list: a list containing name of lib/bin that will not be used.
-            extra_warning_msg_with_default_choice: a warning message that will be prompted if designated choices
-            are not available and fallen back to the default choice.
+            name_input:  name of the lib/bin that user inputs.
+            name_map:    dictionary. {'key': ['alias name', 'package installation command']}
+                         e.g. {'intel': ['iomp5', 'conda install intel-openmp']}. When user passes 'intel' (key) to
+                         omp_runtime to look for openMP dynamic library files, the function passed via argument 'fn'
+                         looks for 'libiomp5.so'(formed from 'alias name') in predefined search paths. If not found,
+                         the 'package installation command' will be printed.
+            category:    category of this lib/bin. 'OpenMP runtime', 'memory allocator', 'multi-task manager', etc.
+            supported:   predefined supported elements list
+            fn:          function how lib/bin files are searched. Return True for a successful search, otherwise False.
+            skip_list:   list containing name of lib/bin that will not be used.
+            extra_warning_msg_with_default_choice: warning message that will be prompted if designated choices
+                                                   are not available and fallen back to the default choice.
         """
         if skip_list is None:
             skip_list = []

@@ -146,9 +146,7 @@ class CPUPoolList:
         if platform.system() == "Windows":
             raise RuntimeError("Windows platform is not supported!!!")
         elif platform.system() == "Linux":
-            """
-            Retrieve CPU information from lscpu.
-            """
+            # Retrieve CPU information from lscpu.
             if lscpu_txt.strip() == "":
                 args = ["lscpu", "--all", "--extended"]
                 my_env = os.environ.copy()
@@ -159,9 +157,7 @@ class CPUPoolList:
             else:
                 lscpu_info = lscpu_txt
 
-            """
-            Filter out lines that are really useful.
-            """
+            # Filter out lines that are really useful.
             lst_lscpu_info = lscpu_info.strip().split("\n")
             headers = {}
             num_cols = 0
@@ -228,23 +224,33 @@ class CPUPoolList:
             print(msg)
 
     """
-    Get CPU pools from all available CPU cores with designated criterias.
-    - ninstances [int]: Number of instances. Should be a non negative integer, 0 by default.
-        When it is 0, it will be set according to usage scenarios automatically in the function.
+    Generate CPU pools from all available CPU cores with designated criterias.
+    - ninstances [int]:          Number of instances. Should be a non negative integer, 0 by default.
+                                 When it is 0, it will be set according to usage scenarios automatically in the
+                                 function.
     - ncores_per_instance [int]: Number of cores per instance. Should be a non negative integer, 0 by default.
-        When it is 0, it will be set according to usage scenarios automatically in the function.
-    - use_logical_cores [bool]: Use logical cores on the workloads or not, False by default. When set to False,
-        only physical cores are used.
-    - use_e_cores [bool]: Use Efficient-Cores, False by default. When set to False, only Performance-Cores are used.
-    - bind_numa_node [bool]: Bind instances to be executed on cores on a single NUMA node, False by default.
-    - nodes_list [list]: A list containing all node ids that the execution is expected to be running on.
-    - cores_list [list]: A list containing all cpu ids that the execution is expected to be running on.
-    - return_mode [str]: A string that defines how result values are formed, could be either of 'auto',
-        'list' and 'range'. When set to 'list', a string with comma-separated cpu ids, '0,1,2,3,...', is returned.
-        When set to 'range', a string with comma-separated cpu id ranges, '0-2,6-8,...', is returned.
-        When set to 'auto', a 'list' or a 'range' whoever has less number of elements that are separated by
-        comma is returned. I.e. for a list '0,1,2,6,7,8' and a range '0-2,6-8', both reflect the same cpu
-        configuration, the range '0-2,6-8' is returned.
+                                 When it is 0, it will be set according to usage scenarios automatically in the
+                                 function.
+    - use_logical_cores [bool]:  Use logical cores on the workloads or not, False by default. When set to False,
+                                 only physical cores are used.
+    - use_e_cores [bool]:        Whether to use Efficient-Cores, False by default.
+                                        Efficient-Cores Performance-Cores
+                                  True:        X               X
+                                 False:                        X
+    - bind_numa_node [bool]:     Bind instances to be executed on cores on a single NUMA node, False by default.
+    - strategy [str]:            Instructs how to bind numa nodes. Can be 'close' or 'scatter', 'close' by default.
+                                      Node: | -------------- 0 --------------- | --------------- 1 -------------- |
+                                      Core: 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+                                   'close': { --- ins 0 --- } { --- ins 1 --- }
+                                 'scatter': { --- ins 0 --- }                   { --- ins 1 --- }
+    - nodes_list [list]:         A list containing all node ids that the execution is expected to be running on.
+    - cores_list [list]:         A list containing all cpu ids that the execution is expected to be running on.
+    - return_mode [str]:         A string that defines how result values are formed, can be 'auto', 'list' or 'range'.
+                                 'list':  a string with comma-separated cpu ids, '0,1,2,3,...', is returned.
+                                 'range': a string with comma-separated cpu id ranges, '0-2,6-8,...', is returned.
+                                 'auto':  a 'list' or a 'range' whichever has less number of elements that are separated
+                                          by comma is returned. I.e. for a list '0,1,2,6,7,8' and a range '0-2,6-8',
+                                          both reflect the same cpu configuration, the range '0-2,6-8' is returned.
     """
 
     def gen_pools_ondemand(
@@ -254,9 +260,9 @@ class CPUPoolList:
         use_logical_cores=False,
         use_e_cores=False,
         bind_numa_node=False,
+        strategy="close",
         nodes_list=None,
         cores_list=None,
-        strategy="close",
         return_mode="auto",
     ):
         if nodes_list is None:
@@ -447,34 +453,3 @@ class CPUPoolList:
                 pool_local.append(c)
             pool_local.sort(key=lambda x: x.cpu)
             self.pools_ondemand.append(pool_local)
-
-
-if __name__ == "__main__":
-    lscpu_txt = """
-"""
-    try:
-        with open("example.txt") as f:
-            lscpu_txt = f.read()
-    except Exception:
-        lscpu_txt = """
-"""
-    pools = CPUPoolList(lscpu_txt=lscpu_txt)
-    pools.gen_pools_ondemand(
-        use_logical_cores=False,
-        return_mode="auto",
-        ninstances=10,
-        ncores_per_instance=-1,
-        use_e_cores=True,
-        bind_numa_node=True,
-        strategy="scatter",
-    )
-    print(f'capacity pool_auto:  {pools.pool_all.get_pool_txt(return_mode="auto")}')
-    # print(f'capacity pool_list:  {pools.pool_all.get_pool_txt(return_mode="list")}')
-    # print(f'capacity pool_range: {pools.pool_all.get_pool_txt(return_mode="range")}')
-    print()
-    for i in range(len(pools.pools_ondemand)):
-        p = pools.pools_ondemand[i]
-        print(f'ondemand pool_auto:  {i} {p.get_pool_txt(return_mode="auto")}')
-        # print(f'ondemand pool_list:  {i} {p.get_pool_txt(return_mode="list")}')
-        # print(f'ondemand pool_range: {i} {p.get_pool_txt(return_mode="range")}')
-        # print([c.cpu for c in p])

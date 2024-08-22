@@ -209,7 +209,7 @@ import glob
 import logging
 import os
 import platform
-from argparse import OPTIONAL, RawTextHelpFormatter, SUPPRESS, ZERO_OR_MORE
+from argparse import RawTextHelpFormatter
 from datetime import datetime
 
 from ._launcher_multi_instances import MultiInstancesLauncher
@@ -375,34 +375,6 @@ def _process_deprecated_params(args, logger):
         args.instance_idx = str(args.rank)
 
 
-class _ArgumentTypesDefaultsHelpFormatter(argparse.HelpFormatter):
-    """Help message formatter which adds default values to argument help.
-
-    Only the name of this class is considered a public API. All the methods
-    provided by the class are considered an implementation detail.
-    """
-
-    def _fill_text(self, text, width, indent):
-        return "".join(indent + line for line in text.splitlines(keepends=True))
-
-    def _split_lines(self, text, width):
-        return text.splitlines()
-
-    def _get_help_string(self, action):
-        help = action.help
-        if "%(type)" not in action.help:
-            if action.type is not SUPPRESS:
-                typeing_nargs = [OPTIONAL, ZERO_OR_MORE]
-                if action.option_strings or action.nargs in typeing_nargs:
-                    help += " (type: %(type)s)"
-        if "%(default)" not in action.help:
-            if action.default is not SUPPRESS:
-                defaulting_nargs = [OPTIONAL, ZERO_OR_MORE]
-                if action.option_strings or action.nargs in defaulting_nargs:
-                    help += " (default: %(default)s)"
-        return help
-
-
 def _init_parser(parser):
     """
     Helper function parsing the command line options
@@ -424,7 +396,6 @@ def _init_parser(parser):
         action="store_true",
         help="Avoid applying python to execute program.",
     )
-
     parser.add_argument(
         "--log-dir",
         "--log_dir",
@@ -439,26 +410,20 @@ def _init_parser(parser):
         type=str,
         help="log file name prefix",
     )
-
-    # positional
     parser.add_argument(
         "program",
         type=str,
         help="Full path to the program/script to be launched. "
         "followed by all the arguments for the script",
     )
-
-    # rest from the training program
     parser.add_argument(
         "program_args",
         nargs=argparse.REMAINDER,
     )
-
     launcher_multi_instances = MultiInstancesLauncher()
     launcher_multi_instances.add_common_params(parser)
     launcher_multi_instances.add_params(parser)
     _add_deprecated_params(parser)
-
     return parser
 
 
@@ -494,7 +459,6 @@ def _run_main_with_args(args, logger, logger_format_str):
     ), 'For non Python script, you should use "--no-python" parameter.'
 
     env_before = set(os.environ.keys())
-    # Verify LD_PRELOAD
     if "LD_PRELOAD" in os.environ:
         lst_valid = []
         tmp_ldpreload = os.environ["LD_PRELOAD"]
@@ -524,20 +488,8 @@ def main():
     logger = logging.getLogger("torch-xeon-launcher")
 
     parser = argparse.ArgumentParser(
-        description="This is a script for launching PyTorch inference on Intel® Xeon® Scalable "
-        "Processors with optimal configurations. Single instance inference, "
-        "multi-instance inference are enable. To get the peak performance on Intel® "
-        "Xeon® Scalable Processors, the script optimizes the configuration "
-        "of thread and memory management. For thread management, the script configures thread "
-        "affinity and the preload of Intel OMP library. For memory management, it configures "
-        "NUMA binding and preload optimized memory allocation library (e.g. tcmalloc, jemalloc) "
-        "\n################################### Basic usage #######################################\n"
-        "\n1. single instance\n"
-        "\n   >>> torch-xeon-launcher python_script args \n"
-        "\n2. multi-instance \n"
-        "\n   >>> torch-xeon-launcher --ninstances xxx "
-        "--ncores-per-instance xx python_script args\n"
-        "\n#######################################################################################\n",
+        description="This is a script for launching PyTorch inference on Intel® Xeon® Scalable Processors "
+        + "with optimal configurations. Single instance inference, multi-instance inference are supported.\n",
         formatter_class=RawTextHelpFormatter,
     )
     parser = _init_parser(parser)
