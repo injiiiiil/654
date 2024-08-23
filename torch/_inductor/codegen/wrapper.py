@@ -42,9 +42,10 @@ from torch.utils._sympy.symbol import symbol_is_type, SymT
 
 from .. import async_compile, config, ir
 from ..codecache import output_code_log
-from ..ir import ReinterpretView
+from ..ir import ExternKernel, ReinterpretView
 from ..runtime import triton_heuristics
 from ..runtime.hints import DeviceProperties
+from ..stream_scheduler import DEFAULT_STREAM_ID
 from ..utils import (
     cache_on_self,
     get_benchmark_name,
@@ -378,6 +379,14 @@ class MemoryPlanningLine(WrapperLine):
 class AllocateLine(MemoryPlanningLine):
     node: ir.Buffer
 
+    def set_user_stream(self, stream_id):
+        self.user_streams = [
+            stream_id,
+        ]
+
+    def add_user_stream(self, stream_id):
+        self.user_streams.append(stream_id)
+
     def plan(self, state: MemoryPlanningState) -> MemoryPlanningLine:
         if self.node.get_name() in V.graph.removed_buffers:
             return NullLine(self.wrapper)
@@ -401,7 +410,39 @@ class AllocateLine(MemoryPlanningLine):
     def codegen(self, code: IndentedBuffer) -> None:
         assert self.node.get_name() not in V.graph.removed_buffers
         line = self.wrapper.make_buffer_allocation(self.node)
-        code.writeline(line)
+        # if self has attribution named user_streams, it is used by multiple streams
+        if hasattr(self, "user_streams"):
+            # the redundant stream_id have been removed when user_streams is set
+            if len(self.user_streams) == 1:
+                if self.user_streams[0] != DEFAULT_STREAM_ID:
+                    code.writeline(
+                        f"torch.cuda.set_stream(stream{self.user_streams[0]}_raw)"
+                    )
+                    code.writeline(line)
+                    code.writeline(
+                        f"torch.cuda.set_stream(stream{DEFAULT_STREAM_ID}_raw)"
+                    )
+                else:
+                    code.writeline(line)
+            elif len(self.user_streams) > 1:
+                # assign the `empty_strided` to the first user_stream
+                assign_stream = self.user_streams[0]
+                event_name = f"event_allocate_{self.node.get_name()}"
+                code.writeline(f"{event_name} = torch.cuda.Event()")
+                if assign_stream != DEFAULT_STREAM_ID:
+                    code.writeline(f"torch.cuda.set_stream(stream{assign_stream}_raw)")
+                code.writeline(line)
+                if assign_stream != DEFAULT_STREAM_ID:
+                    code.writeline(
+                        f"torch.cuda.set_stream(stream{DEFAULT_STREAM_ID}_raw)"
+                    )
+                code.writeline(f"{event_name}.record(stream{assign_stream}_raw)")
+                for user_stream in self.user_streams[1:]:
+                    code.writeline(f"stream{user_stream}_raw.wait_event({event_name})")
+            else:
+                raise AssertionError(f"invalid user_streams: {self.user_streams}")
+        else:
+            code.writeline(line)
 
 
 @dataclasses.dataclass
@@ -686,7 +727,6 @@ class WrapperCodeGen(CodeGen):
     def write_get_raw_stream(self, device_idx: int, graph=None) -> str:
         self.write_get_raw_stream_header_once()
         name = f"stream{device_idx}"
-        self.writeline(f"{name} = get_raw_stream({device_idx})")
         return name
 
     def get_codegened_graph(self):
@@ -716,6 +756,7 @@ class WrapperCodeGen(CodeGen):
         if config.triton.autotune_at_compile_time:
             # mimic logic of EnterDeviceContextManagerLine.codegen for the autotune code block
             self.write_triton_header_once()
+            self.generate_stream_creation()
             self.kernel_autotune_calls.writeline(
                 f"with {V.graph.device_ops.device_guard(device_idx)}:"
             )
@@ -745,6 +786,86 @@ class WrapperCodeGen(CodeGen):
     def generate_end(self, result: IndentedBuffer) -> None:
         return
 
+    def cuda_event_dependency(self, node_name, kernel_IndentedBuffer):
+        """
+        Yueming: is it better to move the dependency detection to streamscheduler?
+        """
+        ssnode = V.graph.stream_graph.name_mapping[node_name]
+
+        def update_event_dependency(tmp_ssnode):
+            dependent_buffers = set()
+            for name in tmp_ssnode.predecessors:
+                predecessor = tmp_ssnode.predecessors[name]
+                if predecessor.is_nop_node:
+                    for prepredecessor in predecessor.predecessors.values():
+                        if (
+                            prepredecessor.stream_id != tmp_ssnode.stream_id
+                            and not prepredecessor.is_nop_node
+                        ):
+                            dependent_buffers.add(prepredecessor)
+                else:
+                    if (
+                        predecessor.stream_id != tmp_ssnode.stream_id
+                        and not predecessor.is_nop_node
+                    ):
+                        dependent_buffers.add(predecessor)
+            for buffer in dependent_buffers:
+                kernel_IndentedBuffer.writeline(
+                    f"stream{tmp_ssnode.stream_id}_raw.wait_event(event_{buffer.get_name()})"
+                )
+
+        update_event_dependency(ssnode)
+        for predecessor in ssnode.predecessors.values():
+            if predecessor.is_nop_node:
+                update_event_dependency(predecessor)
+
+    def cuda_event_create(self, node_name, kernel_IndentedBuffer):
+        ssnode = V.graph.stream_graph.name_mapping[node_name]
+        kernel_IndentedBuffer.writeline(
+            f"event_{ssnode.get_name()} = torch.cuda.Event()"
+        )
+
+    def cuda_event_record(self, node_name, kernel_IndentedBuffer):
+        ssnode = V.graph.stream_graph.name_mapping[node_name]
+        kernel_IndentedBuffer.writeline(
+            f"event_{ssnode.get_name()}.record(stream{ssnode.stream_id}_raw)"
+        )
+
+    def generate_kernel_w_stream(self, node_name, call_strs, stream_switch=True):
+        """
+        Attributes:
+            node_name: name of the caller buffer
+            call_strs: list of strings or a single string to write
+            out_node: for cpp wrapper, we need to define a new buffer before using it.
+        """
+        kernel_IndentedBuffer = IndentedBuffer()
+        self.cuda_event_dependency(node_name, kernel_IndentedBuffer)
+        ssnode = V.graph.stream_graph.name_mapping[node_name]
+        if ssnode.cuda_event:
+            self.cuda_event_create(node_name, kernel_IndentedBuffer)
+        stream_id = ssnode.stream_id
+        kernel_IndentedBuffer = kernel_IndentedBuffer
+        if stream_id != 0:
+            if stream_switch:
+                kernel_IndentedBuffer.writeline(
+                    f"torch.cuda.set_stream(stream{stream_id}_raw)"
+                )
+            if isinstance(call_strs, list):
+                kernel_IndentedBuffer.writelines(call_strs)
+            else:
+                kernel_IndentedBuffer.writeline(call_strs)
+            if stream_switch:
+                kernel_IndentedBuffer.writeline("torch.cuda.set_stream(stream0_raw)")
+        else:
+            if isinstance(call_strs, list):
+                kernel_IndentedBuffer.writelines(call_strs)
+            else:
+                kernel_IndentedBuffer.writeline(call_strs)
+        if ssnode.cuda_event:
+            self.cuda_event_record(node_name, kernel_IndentedBuffer)
+        for line in [_ for _ in kernel_IndentedBuffer.getrawvalue().split("\n") if _]:
+            self.writeline(line)
+
     def generate_fallback_kernel(self, fallback_kernel, args):
         self.generate_extern_kernel_alloc(fallback_kernel, args)
 
@@ -762,29 +883,45 @@ class WrapperCodeGen(CodeGen):
             ending = f".clone(){ending}"
 
         if no_return:
-            self.writeline(f"{self.declare}{kernel_name}({', '.join(args)}){ending}")
+            call_strs = [
+                f"{self.declare}{kernel_name}({', '.join(args)}){ending}",
+            ]
         else:
-            self.writeline(
-                f"{self.declare}{output_name} = {kernel_name}({', '.join(args)}){ending}"
-            )
+            call_strs = [
+                f"{self.declare}{output_name} = {kernel_name}({', '.join(args)}){ending}",
+            ]
             if (
                 self.supports_intermediate_hooks
                 and config.generate_intermediate_hooks
                 and origin_node is not None
             ):
                 counters["inductor"]["intermediate_hooks"] += 1
-                self.writeline(
+                call_strs.append(
                     f"run_intermediate_hooks({origin_node.name!r}, {output_name})"
                 )
+        self.writelines(call_strs, node_name=output_name)
 
     def generate_extern_kernel_out(
-        self, kernel: str, out: str, out_view: Optional[str], args: List[str]
+        self,
+        kernel: str,
+        out: str,
+        out_view: Optional[str],
+        args: List[str],
+        node_name=None,
     ):
         args.append(f"out={out_view if out_view else out}")
-        self.writeline(f"{kernel}({', '.join(args)})")
+        call_strs = [f"{kernel}({', '.join(args)})"]
+        self.writelines(call_strs, node_name=node_name)
 
     def generate_user_defined_triton_kernel(
-        self, kernel_name, raw_args, grid, configs, triton_meta, constexprs
+        self,
+        kernel_name,
+        raw_args,
+        grid,
+        configs,
+        triton_meta,
+        constexprs,
+        node_name=None,
     ):
         grid_fn, code = user_defined_kernel_grid_fn_code(
             kernel_name, configs, grid, wrapper=self
@@ -800,7 +937,12 @@ class WrapperCodeGen(CodeGen):
             for arg in raw_args
         ]
         self.generate_kernel_call(
-            kernel_name, args, grid_fn=grid_fn, arg_types=arg_types, raw_args=raw_args
+            kernel_name,
+            args,
+            grid_fn=grid_fn,
+            arg_types=arg_types,
+            raw_args=raw_args,
+            node_name=node_name,
         )
 
     def generate_scatter_fallback(
@@ -812,6 +954,7 @@ class WrapperCodeGen(CodeGen):
         src_is_tensor,
         reduce,
         kwargs,
+        node_name=None,
     ):
         line = f"{python_kernel_name}({','.join(map(str, inputs))}"
         if python_kernel_name.startswith("aten.scatter_reduce"):
@@ -820,12 +963,14 @@ class WrapperCodeGen(CodeGen):
             if reduce:
                 line += f", reduce={repr(reduce)}"
         line += ")"
-        self.writeline(line)
+        self.writeline(line, node_name=node_name)
 
-    def generate_index_put_fallback(self, kernel, x, indices, values, accumulate):
+    def generate_index_put_fallback(
+        self, kernel, x, indices, values, accumulate, node_name=None
+    ):
         indices_str = f"{self.open_bracket}{', '.join(indices)}{self.closed_bracket}"
         args = [x, indices_str, values, accumulate]
-        self.writeline(self.wrap_kernel_call(kernel, args))
+        self.writeline(self.wrap_kernel_call(kernel, args), node_name=node_name)
 
     def generate_extern_kernel_alloc_and_find_schema_if_needed(
         self,
@@ -839,8 +984,43 @@ class WrapperCodeGen(CodeGen):
         op_overload: Optional[torch._ops.OpOverload] = None,
         raw_args=None,
         outputs=None,
+        node_name=None,
     ):
-        self.writeline(f"{buf_name} = {python_kernel_name}({', '.join(codegen_args)})")
+        self.writeline(
+            f"{buf_name} = {python_kernel_name}({', '.join(codegen_args)})",
+            node_name=node_name,
+        )
+
+    @cache_on_self
+    def generate_stream_creation(self):
+        """
+        Create stream and stream_raw outside the main function.
+        """
+        # @TODO: Need a better skip
+        if not V.graph.cpp_wrapper:
+            device_index = V.graph.scheduler.get_current_device_or_throw().index
+            stream_creation_str = "\n"
+            if config.multiple_streams:
+                for index, num_used in enumerate(V.graph.stream_graph.stream_pool):
+                    if index == V.graph.stream_graph.DEFAULT_STREAM_ID:
+                        stream_creation_str += (
+                            f"stream{index} = get_raw_stream({device_index})\n"
+                        )
+                        continue
+                    if num_used > 0:
+                        stream_creation_str += (
+                            f"stream{index}_raw = torch.cuda.Stream()\n"
+                        )
+                        stream_creation_str += (
+                            f"stream{index} = stream{index}_raw.cuda_stream\n"
+                        )
+            else:
+                stream_creation_str += (
+                    f"stream{device_index} = get_raw_stream({device_index})\n"
+                )
+            self.header.splice(stream_creation_str)
+            if config.triton.autotune_at_compile_time:
+                self.kernel_autotune_calls.splice(stream_creation_str)
 
     def generate(self, is_inference):
         with dynamo_timed("WrapperCodeGen.generate"):
@@ -850,6 +1030,8 @@ class WrapperCodeGen(CodeGen):
         if config.profile_bandwidth:
             self.write_triton_header_once()
         result = IndentedBuffer()
+        self.write_triton_header_once()
+        self.generate_stream_creation()
         result.splice(self.header)
         # We do not want the cpp header for intermediate const graph. Headers would be
         # rendered by the main module instead.
@@ -1111,32 +1293,34 @@ class WrapperCodeGen(CodeGen):
                     f"reinterpret_tensor({data.get_name()}, {size}, {stride}, {offset})"
                 )
 
-    def codegen_device_copy(self, src, dst):
-        self.writeline(f"{dst}.copy_({src})")
+    def codegen_device_copy(self, src, dst, node_name=None):
+        self.writeline(f"{dst}.copy_({src})", node_name=node_name)
 
     def codegen_multi_output(self, name, value):
-        self.writeline(f"{self.declare}{name} = {value}{self.ending}")
+        self.writeline(f"{self.declare}{name} = {value}{self.ending}", node_name=name)
 
     def codegen_dynamic_scalar(self, node):
         (data,) = (t.codegen_reference() for t in node.inputs)
+        call_strs = []
         if len(node.keypath) == 0:
-            self.writeline(f"{node.sym} = {data}.item()")
+            call_strs.append(f"{node.sym} = {data}.item()")
         elif len(node.keypath) == 1 and isinstance(node.keypath[0], ConvertIntKey):
-            self.writeline(f"{node.sym} = 1 if {data}.item() else 0")
+            call_strs.append(f"{node.sym} = 1 if {data}.item() else 0")
         elif len(node.keypath) == 1 and isinstance(node.keypath[0], DivideByKey):
-            self.writeline(f"{node.sym}_undivided = {data}.item()")
-            self.writeline(
+            call_strs.append(f"{node.sym}_undivided = {data}.item()")
+            call_strs.append(
                 f"assert {node.sym}_undivided % {node.keypath[0].divisor} == 0, "
                 f"f'{{{node.sym}_undivided}} not divisible by {node.keypath[0].divisor}'"
             )
-            self.writeline(
+            call_strs.append(
                 f"{node.sym} = {node.sym}_undivided // {node.keypath[0].divisor}"
             )
         else:
             raise AssertionError(f"unrecognized keypath {node.keypath}")
         # No one should ever use this buffer, but for uniformity
         # define the variable and assign it None
-        self.writeline(f"{node.get_name()} = None")
+        call_strs.append(f"{node.get_name()} = None")
+        self.writelines(call_strs, node_name=node.name)
 
     def benchmark_compiled_module(self, output):
         def add_fake_input(name, shape, stride, device, dtype):
@@ -1455,16 +1639,20 @@ class WrapperCodeGen(CodeGen):
         )
         return name, triton_meta
 
-    def generate_numel_expr(self, kernel_name: str, tree):
+    def generate_numel_expr(self, kernel_name: str, tree, kernel_IndentedBuffer=None):
         expr = f"{kernel_name}_{tree.prefix}numel"
+        if kernel_IndentedBuffer:
+            writer = kernel_IndentedBuffer
+        else:
+            writer = self
         if (expr, V.graph) not in self.kernel_numel_expr:
             # declare expr once in each graph (scope)
             self.kernel_numel_expr.add((expr, V.graph))
-            self.writeline(
+            writer.writeline(
                 f"{self.declare}{expr} = {self.expr_printer(tree.numel)}{self.ending}"
             )
         else:
-            self.writeline(f"{expr} = {self.expr_printer(tree.numel)}{self.ending}")
+            writer.writeline(f"{expr} = {self.expr_printer(tree.numel)}{self.ending}")
         # We can get symbolic expressions here, like s0*64
         # It is fine to have them here, but we need to handle them correctly as their own type
         # This is tricky to do, so we wrap in a custom type, distinct from scalars, but also from sympy*
@@ -1627,6 +1815,7 @@ class WrapperCodeGen(CodeGen):
         grid_fn: str = "grid",
         triton_meta=None,
         grid_extra_kwargs="",
+        node_name=None,
     ):
         """
         Generates kernel call code.
@@ -1637,12 +1826,18 @@ class WrapperCodeGen(CodeGen):
                 Otherwise it uses the CUDA language for codegen.
                 Only valid when cuda == True.
         """
+
         if cuda:
             device_index, call_args_str = self.prepare_triton_kernel_call(
                 device_index, call_args
             )
             call_args_str = ", ".join(call_args_str)
-            stream_name = self.write_get_raw_stream(device_index, V.graph)
+            if config.multiple_streams:
+                ssnode = V.graph.stream_graph.name_mapping[node_name]
+                stream_id = ssnode.stream_id
+                stream_name = f"stream{stream_id}"
+            else:
+                stream_name = self.write_get_raw_stream(device_index, V.graph)
             if triton:
                 self.write_triton_header_once()
                 if grid is None:
@@ -1652,9 +1847,13 @@ class WrapperCodeGen(CodeGen):
                     if grid_extra_kwargs:
                         grid_str = f"{grid_str}, {grid_extra_kwargs}"
                     grid_str = f"{grid_fn}({grid_str})"
-                self.writeline(
-                    f"{kernel_name}.run({call_args_str}, grid={grid_str}, stream={stream_name})"
-                )
+                call_str = f"{kernel_name}.run({call_args_str}, grid={grid_str}, stream={stream_name})"
+                if config.multiple_streams:
+                    self.generate_kernel_w_stream(
+                        node_name, call_str, stream_switch=False
+                    )
+                else:
+                    self.writeline(call_str)
                 if (
                     config.triton.autotune_at_compile_time
                     and kernel_name not in self.kernel_autotune_names
@@ -1719,12 +1918,31 @@ class WrapperCodeGen(CodeGen):
         else:
             self.writeline(self.wrap_kernel_call(kernel_name, call_args))
 
-    def writeline(self, line):
-        self.lines.append(line)
+    def writeline(self, line, caller=None, node_name=None):
+        if config.multiple_streams:
+            if caller is not None:
+                assert isinstance(caller, ExternKernel)
+                node_name = caller.name
+            if node_name is not None:
+                self.generate_kernel_w_stream(node_name, line)
+            else:
+                self.lines.append(line)
+        else:
+            self.lines.append(line)
 
-    def writelines(self, lines):
-        for line in lines:
-            self.writeline(line)
+    def writelines(self, lines, caller=None, node_name=None):
+        if config.multiple_streams:
+            if caller is not None:
+                assert isinstance(caller, ExternKernel)
+                node_name = caller.name
+            if node_name is not None:
+                self.generate_kernel_w_stream(node_name, lines)
+            else:
+                for line in lines:
+                    self.writeline(line)
+        else:
+            for line in lines:
+                self.writeline(line)
 
     def enter_context(self, ctx):
         self.lines.append(LineContext(ctx))
@@ -1851,7 +2069,19 @@ class WrapperCodeGen(CodeGen):
             self.codegen_deferred_allocation(name, layout)
             return
 
-        self.writeline(AllocateLine(self, buffer))
+        new_allocateline = AllocateLine(self, buffer)
+        if config.multiple_streams:
+            ssnode = V.graph.stream_graph.name_mapping[buffer.get_name()]
+            new_allocateline.set_user_stream(ssnode.stream_id)
+            user_streams = set()
+            if ssnode.is_nop_node:
+                for predecessor in ssnode.predecessors.values():
+                    if predecessor.stream_id != ssnode.stream_id:
+                        user_streams.add(predecessor.stream_id)
+                for user_stream in user_streams:
+                    new_allocateline.add_user_stream(user_stream)
+
+        self.writeline(new_allocateline)
 
     def codegen_free(self, buffer):
         name = buffer.get_name()
@@ -1952,6 +2182,7 @@ class WrapperCodeGen(CodeGen):
         self.codegen_subgraph(conditional.false_subgraph, outer_inputs, outer_outputs)
         self.writeline(ExitSubgraphLine(self))
 
+    # @TODO Yueming: fix multistream
     def codegen_while_loop(self, while_loop):
         name = while_loop.get_name()
         outer_carried_inputs = [

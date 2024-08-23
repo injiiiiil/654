@@ -116,7 +116,7 @@ class CppWrapperCuda(CppWrapperCpu):
         return super().generate(is_inference)
 
     def generate_user_defined_triton_kernel(
-        self, kernel_name, raw_args, grid, configs, triton_meta, constexprs
+        self, kernel_name, raw_args, grid, configs, triton_meta, constexprs, node_name=None
     ):
         # in C++ wrapper, we don't pass constexpr args, as they don't
         # get added as parameters to the PTX code compiled from the
@@ -151,6 +151,7 @@ class CppWrapperCuda(CppWrapperCpu):
             cuda=True,
             triton=True,
             triton_meta=triton_meta,
+            node_name=node_name
         )
 
     @functools.lru_cache(None)  # noqa: B019
@@ -271,6 +272,7 @@ class CppWrapperCuda(CppWrapperCpu):
         grid_fn: str = "grid",
         triton_meta=None,
         grid_extra_kwargs="",
+        node_name=None,
     ):
         assert arg_types is not None and len(call_args) == len(
             arg_types

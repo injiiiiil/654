@@ -82,6 +82,10 @@ def draw_buffers(
         if isinstance(node, ir.ComputedBuffer):
             dtype = node.data.dtype
 
+        if hasattr(V.graph, "stream_graph") and V.graph.stream_graph is not None:
+            ssnode = V.graph.stream_graph.name_mapping[node.name]
+            node.meta["stream_id"] = ssnode.stream_id
+        
         metadata = TensorMetadata(group, dtype, None, None, None, None, None)  # type: ignore[arg-type]
         node.meta["tensor_meta"] = metadata
 

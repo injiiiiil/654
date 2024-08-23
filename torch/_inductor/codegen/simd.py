@@ -40,6 +40,7 @@ from ..optimize_indexing import indexing_dtype_strength_reduction
 from ..runtime.hints import ReductionHint
 from ..runtime.runtime_utils import green_text, yellow_text
 from ..scheduler import BaseSchedulerNode, BaseScheduling, WhyNoFuse
+from ..stream_scheduler import DEFAULT_STREAM_ID
 from ..utils import (
     get_dtype_size,
     IndentedBuffer,
@@ -1411,7 +1412,7 @@ class SIMDScheduling(BaseScheduling):
             call_args, kernel_name, arg_signatures, final_kernel
         )
         with debug_printer_manager:
-            final_kernel.call_kernel(final_kernel.kernel_name)
+            final_kernel.call_kernel(final_kernel.kernel_name, node_name=node_schedule[0].get_name())
 
         if config.nan_asserts:
             final_kernel.codegen_nan_check()
