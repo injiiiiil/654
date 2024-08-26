@@ -33,7 +33,7 @@ TestConfig = namedtuple("TestConfig", "test_name input_config tag run_backward")
 
 BENCHMARK_TESTER = []
 
-SKIP_OP_LISTS = ['weight_norm_sparsifier_step']
+SKIP_OP_LISTS = ['weight_norm_sparsifier_step', 'original_kernel_channel']
 
 def _register_test(*test_metainfo):
     """save the metainfo needed to create a test. Currently test_metainfo
