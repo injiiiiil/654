@@ -675,7 +675,9 @@ class WrapperCodeGen(CodeGen):
                 self.prefix.writeline(V.graph.device_ops.synchronize())
             phase = V.graph.get_training_phase()
             if config.annotate_training:
-                self.prefix.writeline(f"training_annotation = nvtx.device_range_start('{phase}')")
+                self.prefix.writeline(
+                    f"training_annotation = nvtx.device_range_start('{phase}')"
+                )
             if V.graph.graph_inputs:
                 lhs = ", ".join(V.graph.graph_input_names)
                 if len(V.graph.graph_input_names) == 1:
@@ -906,7 +908,9 @@ class WrapperCodeGen(CodeGen):
                 self.generate_and_run_autotune_block()
 
             if config.annotate_training:
-                self.wrapper_call.writeline("nvtx.device_range_end(training_annotation)")
+                self.wrapper_call.writeline(
+                    "nvtx.device_range_end(training_annotation)"
+                )
             self.generate_return(output_refs)
 
         self.finalize_prefix()
