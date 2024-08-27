@@ -25,7 +25,7 @@ from torch.ao.quantization.quantizer.xnnpack_quantizer_utils import (
     QuantizationConfig,
 )
 from torch.testing._internal.common_quantization import QuantizationTestCase
-from torch.testing._internal.common_utils import IS_WINDOWS
+from torch.testing._internal.common_utils import IS_WINDOWS, raise_on_run_directly
 
 
 class TestHelperModules:
@@ -309,3 +309,7 @@ class TestDuplicateDQPass(QuantizationTestCase):
             example_inputs,
             BackendAQuantizer(),
         )
+
+
+if __name__ == "__main__":
+    raise_on_run_directly("test/test_quantization.py")
