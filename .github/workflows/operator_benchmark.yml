@@ -23,7 +23,7 @@ jobs:
     with:
       build-environment: linux-jammy-py3.8-gcc11-build
       docker-image-name: pytorch-linux-jammy-py3.8-gcc11-opbenchmark-build
-      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}amz2023."
+      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
       test-matrix: |
         { include: [
           { config: "cpu_operator_benchmark", shard: 1, num_shards: 3, runner: "${{ needs.get-label-type.outputs.label-type }}amz2023.linux.12xlarge" }, 
