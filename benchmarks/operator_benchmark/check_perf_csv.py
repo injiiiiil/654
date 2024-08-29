@@ -28,7 +28,7 @@ def check_perf(actual_csv, expected_csv, expected_filename, threshold):
         )
             continue
 
-        speed_up = perf / expected_perf - 1
+        speed_up = expected_perf / perf
         
         if 0-threshold <= speed_up <= threshold:
             status = "PASS"
