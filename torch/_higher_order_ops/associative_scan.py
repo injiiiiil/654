@@ -8,7 +8,12 @@ import torch._prims_common as utils
 import torch._subclasses.functional_tensor
 import torch.utils._pytree as pytree
 from torch._C import DispatchKey
-from torch._C._functorch import _add_batch_dim, get_unwrapped, maybe_get_bdim
+from torch._C._functorch import (
+    _add_batch_dim,
+    get_unwrapped,
+    is_batchedtensor,
+    maybe_get_bdim,
+)
 from torch._higher_order_ops.utils import (
     _set_compilation_env,
     autograd_not_implemented,
@@ -87,9 +92,14 @@ def associative_scan(
     assert callable(combine_fn), "combine_fn must be a callable, but got {combine_fn}"
     assert isinstance(dim, int), "dim must be an int, but got {type(dim)}"
 
+    # Dynamo is expecting a callable with "__code__" attribute.
+    # We cannot directly pass cond_op to it. So we wrap it in a dummy function.
+    def _associative_scan_op_wrapper(*args, **kwargs):
+        return associative_scan(*args, **kwargs)
+
     if not torch._dynamo.is_compiling():
         with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
-            return torch.compile(associative_scan, fullgraph=True)(
+            return torch.compile(_associative_scan_op_wrapper, fullgraph=True)(
                 combine_fn, input, dim, reverse=reverse
             )
 
@@ -203,25 +213,48 @@ def associative_scan_functionalize(ctx, combine_fn, input, dim):
 
 
 @associative_scan_op.py_impl(torch._C._functorch.TransformType.Vmap)
-def associative_scan_batch_rule(interpreter, input, dim, combine_fn):
-    input_ = [get_unwrapped(x) for x in input]
-    input_bdims = [maybe_get_bdim(x) for x in input]
+def associative_scan_batch_rule(interpreter, combine_fn, input, dim):
+    assert isinstance(
+        input, (list, tuple)
+    ), "Associative scan inputs must be a list or tuple of tensors"
+    assert all(
+        isinstance(i, torch.Tensor) for i in input
+    ), "Associative scan inputs must be a list of tensors"
+
+    input_bdims = [maybe_get_bdim(x) if is_batchedtensor(x) else None for x in input]
+
+    # unbatched tensors are not vmapped
+    input_unwrapped, input_bdims = zip(
+        *[
+            (get_unwrapped(t), maybe_get_bdim(t)) if is_batchedtensor(t) else (t, None)
+            for t in input
+        ]
+    )
 
     batch_size = None
-    for inp, bdim in zip(input, input_bdims):
+    for inp, unwrap, bdim in zip(input, input_unwrapped, input_bdims):
         if bdim is not None:
-            batch_size = get_unwrapped(inp).shape[bdim]
+            batch_size = (
+                unwrap.shape[bdim] if is_batchedtensor(inp) else inp.shape[bdim]
+            )
 
-    assert batch_size
-    input_unwrapped = []
-    for x, bdim in zip(input, input_bdims):
-        unwrap = get_unwrapped(x)
-        if dim is None:
-            unwrap = unwrap.unsqueeze(0).expand(batch_size, *x.shape)
-        else:
-            unwrap = unwrap.movedim(bdim, 0)
-        input_unwrapped.append(unwrap)
+    if batch_size:
+        input_unwrapped_exp = []
+        for x, unwrap, bdim in zip(input, input_unwrapped, input_bdims):
+            if dim is None:
+                unwrap = unwrap.unsqueeze(0).expand(batch_size, *x.shape)
+            else:
+                if bdim is None:
+                    unwrap = unwrap.unsqueeze(0).expand(batch_size, *x.shape)
+                else:
+                    unwrap = unwrap.movedim(bdim, 0)
+            input_unwrapped_exp.append(unwrap)
 
-    res = associative_scan_op(combine_fn, input_unwrapped, dim + 1)
+        with interpreter.lower():
+            res = associative_scan_op(combine_fn, input_unwrapped_exp, dim + 1)
+    else:
+        with interpreter.lower():
+            res = associative_scan_op(combine_fn, input_unwrapped, dim)
+
     lvl = interpreter.level()
     return [_add_batch_dim(x, 0, lvl) for x in res]

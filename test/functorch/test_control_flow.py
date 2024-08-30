@@ -19,6 +19,7 @@ from torch.fx.experimental.proxy_tensor import make_fx
 from torch.testing._internal.common_cuda import SM70OrLater
 from torch.testing._internal.common_quantization import skipIfNoDynamoSupport
 from torch.testing._internal.common_utils import (
+    decorateIf,
     instantiate_parametrized_tests,
     IS_WINDOWS,
     parametrize,
@@ -1203,6 +1204,153 @@ def forward(self, pred_1, x_1):
         true_outs = fwbw(control_flow.map, f, x, y)
         fake_outs = fwbw(_fake_map, f, x, y)
         self.assertEqual(true_outs, fake_outs)
+
+    @unittest.skipIf(not SM70OrLater, "triton")
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("reverse", [False, True])
+    @parametrize("device", [torch.device("cuda")])
+    # The current vmap implementation does not support the reverse flag
+    @decorateIf(unittest.skip, lambda params: params["reverse"])
+    def test_pointwise_associative_scan_vmap_dims(self, reverse, device):
+        import random
+
+        def add(x: torch.Tensor, y: torch.Tensor):
+            return x + y
+
+        for _ in range(10):
+            torch.compiler.reset()
+
+            dims = random.randint(3, 9)
+            shapes = [random.randint(2, 10) for d in range(dims)]
+            x = torch.randn(*shapes, device=device)
+            in_dim = random.randint(0, dims - 1)
+            out_dim = random.randint(0, dims - 1)
+            scan_dim = random.randint(0, dims - 2)
+
+            def associative_scan_fct(x):
+                return associative_scan(add, x, scan_dim, reverse=reverse)
+
+            associative_scan1 = torch.compile(
+                torch.vmap(associative_scan_fct, in_dims=in_dim, out_dims=out_dim),
+                fullgraph=True,
+            )
+            associative_scan2 = associative_scan
+
+            result1 = associative_scan1(x)
+            result2 = [
+                torch.unsqueeze(
+                    associative_scan2(
+                        add,
+                        torch.squeeze(
+                            torch.ops.aten.slice(x, in_dim, x_ind, x_ind + 1, 1),
+                            in_dim,
+                        ),
+                        scan_dim,
+                    ),
+                    in_dim,
+                )
+                for x_ind in range(x.shape[in_dim])
+            ]
+            result2 = torch.concatenate(result2, in_dim)
+            result2 = torch.movedim(result2, in_dim, out_dim)
+            expected_result = [
+                torch.unsqueeze(
+                    _fake_associative_scan(
+                        add,
+                        torch.squeeze(
+                            torch.ops.aten.slice(x, in_dim, x_ind, x_ind + 1, 1),
+                            in_dim,
+                        ),
+                        scan_dim,
+                        reverse=reverse,
+                    ),
+                    in_dim,
+                )
+                for x_ind in range(x.shape[in_dim])
+            ]
+            expected_result = torch.concatenate(expected_result, in_dim)
+            expected_result = torch.movedim(expected_result, in_dim, out_dim)
+            self.assertEqual(result1, expected_result)
+            self.assertEqual(result2, expected_result)
+
+    @unittest.skipIf(not SM70OrLater, "triton")
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("reverse", [False, True])
+    @parametrize("device", [torch.device("cuda")])
+    # The current vmap implementation does not support the reverse flag
+    @decorateIf(unittest.skip, lambda params: params["reverse"])
+    def test_pointwise_associative_scan_vmap_comp(self, reverse, device):
+        def add(x: torch.Tensor, y: torch.Tensor):
+            return x + y
+
+        x = torch.tile(
+            torch.unsqueeze(
+                torch.arange(
+                    0, 10, device=device, dtype=torch.float32, requires_grad=True
+                ),
+                0,
+            ),
+            (4, 1),
+        )
+        torch.compiler.reset()
+
+        def associative_scan_fct(x):
+            return associative_scan(add, x, 0, reverse=reverse)
+
+        associative_scan1 = torch.compile(
+            torch.vmap(associative_scan_fct, in_dims=1, out_dims=1), fullgraph=True
+        )
+        associative_scan2 = associative_scan
+
+        result1 = associative_scan1(x)
+        result2 = associative_scan2(add, x, 0, reverse=reverse)
+        expected_result = _fake_associative_scan(add, x, 0, reverse=reverse)
+        self.assertEqual(result1, expected_result)
+        self.assertEqual(result2, expected_result)
+
+    @unittest.skipIf(not SM70OrLater, "triton")
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("reverse", [False, True])
+    @parametrize("device", [torch.device("cuda")])
+    # The current vmap implementation does not support the reverse flag
+    @decorateIf(unittest.skip, lambda params: params["reverse"])
+    def test_pointwise_associative_scan_vmap_pytree(self, reverse, device):
+        def fct_pointwise(x, y):
+            return {
+                "i": x["i"] * y["i"],
+                "j": (x["j"][0] + y["j"][0],),
+            }
+
+        x = torch.tile(
+            torch.unsqueeze(
+                torch.unsqueeze(torch.randn(10, device=device, requires_grad=True), 0),
+                -1,
+            ),
+            (3, 1, 2),
+        )
+        y = torch.tile(
+            torch.unsqueeze(
+                torch.unsqueeze(torch.randn(10, device=device, requires_grad=True), 0),
+                -1,
+            ),
+            (3, 1, 2),
+        )
+        inp = {"i": x, "j": (y,)}
+
+        def associative_scan_fct(z):
+            return associative_scan(fct_pointwise, z, 0, reverse=reverse)
+
+        torch.compiler.reset()
+        associative_scan1 = torch.compile(
+            torch.vmap(associative_scan_fct, in_dims=1, out_dims=1), fullgraph=True
+        )
+        associative_scan2 = torch.vmap(associative_scan_fct, in_dims=1, out_dims=1)
+
+        result1 = associative_scan1(inp)
+        # result2 = associative_scan2(inp)
+        expected_result = _fake_associative_scan(fct_pointwise, inp, 0, reverse=reverse)
+        self.assertEqual(result1, expected_result)
+        # self.assertEqual(result2, expected_result)
 
     @unittest.skipIf(not SM70OrLater, "triton")
     @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
@@ -3856,7 +4004,6 @@ class TestHopSchema(TestCase):
 
 instantiate_parametrized_tests(TestHopSchema)
 instantiate_parametrized_tests(TestControlFlowTraced)
-
 instantiate_parametrized_tests(TestControlFlow)
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ import enum
 import torch
 import numpy as np
 from torch import inf, nan
+from torch._higher_order_ops.associative_scan import associative_scan
 
 from typing import Any, Dict, List, Tuple, Union, Sequence
 from torch.testing import make_tensor
@@ -6955,6 +6956,23 @@ def sample_inputs_cumulative_ops(op_info, device, dtype, requires_grad, supports
         yield SampleInput(_make_tensor_helper((S, S, S)), 1, dtype=dtype)
 
 
+def sample_inputs_associative_scan(op_info, device, dtype, requires_grad, supports_dtype_kwargs=True, **kwargs):
+    def _make_tensor_helper(shape, dtype=torch.float32, low=None, high=None):
+        return make_tensor(shape, dtype=dtype, device=device, low=low, high=high, requires_grad=requires_grad)
+
+    make_arg = partial(make_tensor, device=device, dtype=dtype, requires_grad=requires_grad)
+
+    def fct(x, y):
+        return x * y + x + y
+
+    yield SampleInput(fct,
+                      _make_tensor_helper((2, 3, 4), low=0.1, high=2),
+                      int(_make_tensor_helper((), dtype=torch.int32, low=0, high=2)),
+                    #   _make_tensor_helper((), dtype=torch.bool)
+                      False
+                      )
+
+
 def sample_inputs_unfold(op_info, device, dtype, requires_grad, **kwargs):
     test_cases = (
         ((), (0, 1, 1)),
@@ -12893,6 +12911,16 @@ op_db: List[OpInfo] = [
            skips=(
            ),
            gradcheck_nondet_tol=GRADCHECK_NONDET_TOL),
+    OpInfo('associative_scan',
+           op=associative_scan,
+           dtypes=all_types_and_complex_and(torch.half, torch.bfloat16),
+           supports_forward_ad=True,
+           supports_fwgrad_bwgrad=False,
+           skips=(
+               # cumsum does not handle correctly out= dtypes
+            #    DecorateInfo(unittest.expectedFailure, 'TestCommon', 'test_out'),
+           ),
+           sample_inputs_func=sample_inputs_associative_scan),
     UnaryUfuncInfo('deg2rad',
                    ref=np.radians,
                    decorators=(precisionOverride({torch.bfloat16: 7e-1,
