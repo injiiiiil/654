@@ -34,7 +34,7 @@ def check_perf(actual_csv, expected_csv, expected_filename, threshold):
             status = "PASS"
             print(f"{case:34}  {status}")
             continue
-        elif speed_up => 1 + threshold:
+        elif speed_up >= 1 + threshold:
             status = "IMPROVED:"
             failed.append(case)
         else:
