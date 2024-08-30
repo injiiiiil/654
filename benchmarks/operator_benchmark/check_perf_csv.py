@@ -24,13 +24,13 @@ def check_perf(actual_csv, expected_csv, expected_filename, threshold):
         if expected_perf is None:
             status = "FAIL"
             print(
-            f"\n{case:34}  {status:9} Not Found. if it is expected, you can update in {expected_filename} to reflect the new module. "
-        )
+                f"\n{case:34}  {status:9} Not Found. if it is expected, you can update in {expected_filename} to reflect the new module. "
+            )
             continue
 
         speed_up = expected_perf / perf
-        
-        if 1 - threshold <= speed_up < 1 + threshold :
+
+        if (1 - threshold) <= speed_up < (1 + threshold):
             status = "PASS"
             print(f"{case:34}  {status}")
             continue
@@ -40,9 +40,7 @@ def check_perf(actual_csv, expected_csv, expected_filename, threshold):
         else:
             status = "FAILED:"
             improved.append(case)
-        print(
-            f"{case:34}  {status:9} perf={perf}, expected={expected_perf}"
-        )
+        print(f"{case:34}  {status:9} perf={perf}, expected={expected_perf}")
 
     msg = ""
     if failed or improved:
@@ -75,8 +73,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--actual", type=str, required=True)
     parser.add_argument("--expected", type=str, required=True)
-    parser.add_argument("--threshold", type=float, default=0.5, 
-        help="threshold to define regression/improvement")
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="threshold to define regression/improvement",
+    )
     args = parser.parse_args()
 
     actual = pd.read_csv(args.actual)
