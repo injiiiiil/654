@@ -83,7 +83,7 @@ class TestPackageScript(PackageTestCase):
                     class UsesInterface(torch.nn.Module):
                         proxy_mod: ModuleInterface
 
-                        def __init__(self):
+                        def __init__(self) -> None:
                             super().__init__()
                             self.proxy_mod = ImplementsInterface()
 
@@ -243,7 +243,7 @@ class TestPackageScript(PackageTestCase):
                 return input
 
         class TopMod(torch.nn.Module):
-            def __init__(self):
+            def __init__(self) -> None:
                 super().__init__()
                 self.modB = Submod()
 
@@ -707,7 +707,7 @@ class TestPackageScript(PackageTestCase):
         """
 
         class TorchVisionTestInline(torch.nn.Module):
-            def __init__(self):
+            def __init__(self) -> None:
                 super().__init__()
                 self.tvmod = resnet18()
 
@@ -746,7 +746,7 @@ class TestPackageScript(PackageTestCase):
         """
 
         class M(torch.nn.Module):
-            def __init__(self):
+            def __init__(self) -> None:
                 super().__init__()
                 self.foo = torch.ones(2, 3)
 
