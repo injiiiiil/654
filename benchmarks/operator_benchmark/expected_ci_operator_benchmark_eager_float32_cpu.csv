@@ -265,8 +265,8 @@ PyTorch,batchnorm,batchnorm_N128_C8192_cpu_trainingTrue_cudnnFalse,long,FALSE,23
 PyTorch,batchnorm,batchnorm_N128_C8192_cpu_trainingFalse_cudnnFalse,long,FALSE,64.74235
 PyTorch,batchnorm,batchnorm_N128_C2048_cpu_trainingTrue_cudnnFalse,long,FALSE,213.699329
 PyTorch,batchnorm,batchnorm_N128_C2048_cpu_trainingFalse_cudnnFalse,long,FALSE,32.682442
-PyTorch,batchnorm,batchnorm_N3136_C256_cpu_trainingTrue_cudnnFalse_bwdall_BACKWARD,short,TRUE,783.941402
-PyTorch,batchnorm,batchnorm_N3136_C256_cpu_trainingTrue_cudnnFalse_bwd1_BACKWARD,short,TRUE,802.5485867
+PyTorch,batchnorm,batchnorm_N3136_C256_cpu_trainingTrue_cudnnFalse_bwdall_BACKWARD,short,TRUE,583.941402
+PyTorch,batchnorm,batchnorm_N3136_C256_cpu_trainingTrue_cudnnFalse_bwd1_BACKWARD,short,TRUE,502.5485867
 PyTorch,batchnorm,batchnorm_N3136_C256_cpu_trainingFalse_cudnnFalse_bwdall_BACKWARD,short,TRUE,217.4318827
 PyTorch,batchnorm,batchnorm_N3136_C256_cpu_trainingFalse_cudnnFalse_bwd1_BACKWARD,short,TRUE,219.0956433
 PyTorch,batchnorm,batchnorm_N2_C8192_cpu_trainingTrue_cudnnFalse_bwdall_BACKWARD,long,TRUE,171.007824
@@ -2710,7 +2710,7 @@ PyTorch,q_interpolate,q_interpolate_M512_N512_K512_dtypetorch.qint32_modebilinea
 PyTorch,QLayerNormBenchmark,"QLayerNormBenchmark_dims(1,8,16)_dtypetorch.qint8",short,FALSE,10.14091267
 PyTorch,QLayerNormBenchmark,"QLayerNormBenchmark_dims(8,8,16)_dtypetorch.qint8",short,FALSE,16.83267233
 PyTorch,QLayerNormBenchmark,"QLayerNormBenchmark_dims(32,8,16)_dtypetorch.qint8",short,FALSE,17.28877467
-PyTorch,QLayerNormBenchmark,"QLayerNormBenchmark_dims(64,128,56,56)_dtypetorch.qint8",short,FALSE,2402.015207
+PyTorch,QLayerNormBenchmark,"QLayerNormBenchmark_dims(64,128,56,56)_dtypetorch.qint8",short,FALSE,1802.015207
 PyTorch,QLinear,QLinear_N1_IN1_OUT1_cpu,short,FALSE,60.045095
 PyTorch,QLinear,QLinear_N4_IN256_OUT128_cpu,short,FALSE,68.88948933
 PyTorch,QLinear,QLinear_N16_IN512_OUT256_cpu,short,FALSE,72.036685
