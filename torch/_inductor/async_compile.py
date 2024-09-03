@@ -108,7 +108,7 @@ def shutdown_compile_workers() -> None:
 def after_fork():
     """Reset pools to initial state without shutting them down"""
     _pool_set.clear()
-    AsyncCompile.process_pool.cache_clear()
+    process_pool_impl.cache_clear()
 
 
 try:
@@ -117,40 +117,59 @@ except AttributeError:
     pass  # register_at_fork does not exists on windows
 
 
+thread_pool: Optional[ThreadPoolExecutor] = None
+
+
+@functools.lru_cache(1)
+def pool_impl(compile_threads: int):
+    global thread_pool
+    assert compile_threads > 1
+
+    # If this function is called, either compile_threads has changed or this
+    # is the first call.
+    if thread_pool is not None:
+        thread_pool.shutdown(wait=True, cancel_futures=False)
+
+    thread_pool = ThreadPoolExecutor(config.compile_threads)
+    return thread_pool
+
+
+@functools.lru_cache(1)
+def process_pool_impl(compile_threads: int, worker_start_method: str) -> AnyPool:
+    assert compile_threads > 1
+    pool: AnyPool
+    if worker_start_method == "subprocess":
+        # Wrapper around ProcessPoolExecutor forks in a new process we control
+        pool = SubprocPool(compile_threads)
+    else:
+        pre_fork_setup()
+        ctx = multiprocessing.get_context(worker_start_method)
+        pool = ProcessPoolExecutor(
+            compile_threads,
+            mp_context=ctx,
+            initializer=partial(_async_compile_initializer, os.getpid()),
+        )
+        # when this pool is created in a subprocess object, the normal exit handler
+        # doesn't run, and we need to register our own handler.
+        # exitpriority has to be high, because another one of the finalizers will
+        # kill the worker thread that sends the shutdown message to the workers...
+        multiprocessing.util.Finalize(None, pool.shutdown, exitpriority=sys.maxsize)
+
+    _pool_set.add(pool)
+    return pool
+
+
 class AsyncCompile:
     def __init__(self) -> None:
         pass
 
     @staticmethod
-    @functools.lru_cache(1)
     def pool() -> ThreadPoolExecutor:
-        assert config.compile_threads > 1
-        return ThreadPoolExecutor(config.compile_threads)
+        return pool_impl(config.compile_threads)
 
     @staticmethod
-    @functools.lru_cache(1)
     def process_pool() -> AnyPool:
-        assert config.compile_threads > 1
-        pool: AnyPool
-        if config.worker_start_method == "subprocess":
-            # Wrapper around ProcessPoolExecutor forks in a new process we control
-            pool = SubprocPool(config.compile_threads)
-        else:
-            pre_fork_setup()
-            ctx = multiprocessing.get_context(config.worker_start_method)
-            pool = ProcessPoolExecutor(
-                config.compile_threads,
-                mp_context=ctx,
-                initializer=partial(_async_compile_initializer, os.getpid()),
-            )
-            # when this pool is created in a subprocess object, the normal exit handler
-            # doesn't run, and we need to register our own handler.
-            # exitpriority has to be high, because another one of the finalizers will
-            # kill the worker thread that sends the shutdown message to the workers...
-            multiprocessing.util.Finalize(None, pool.shutdown, exitpriority=sys.maxsize)
-
-        _pool_set.add(pool)
-        return pool
+        return process_pool_impl(config.compile_threads, config.worker_start_method)
 
     @classmethod
     def warm_pool(cls) -> None:
