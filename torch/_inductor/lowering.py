@@ -2254,8 +2254,6 @@ make_fallback(aten.sort.stable)
 make_fallback(aten.kthvalue)
 make_fallback(aten.topk)
 make_fallback(aten.mode)
-make_fallback(aten.median)
-make_fallback(aten.nanmedian)
 make_fallback(aten.randperm)
 # see: https://github.com/pytorch/pytorch/pull/121354
 make_fallback(aten.resize_)
