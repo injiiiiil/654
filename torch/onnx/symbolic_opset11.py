@@ -1,12 +1,13 @@
 # mypy: allow-untyped-defs
 # mypy: disable-error-code=arg-type
 """This file exports ONNX ops for opset 11."""
+
 from __future__ import annotations
 
 import functools
 import sys
 import warnings
-from typing import Optional, Sequence
+from typing import Sequence
 
 import torch
 from torch import _C
@@ -20,6 +21,7 @@ from torch.onnx import (
     utils,
 )
 from torch.onnx._internal import jit_utils, registration
+
 
 # EDITING THIS FILE? READ THIS FIRST!
 # see Note [Edit Symbolic Files] in README.md
@@ -1189,7 +1191,7 @@ def linalg_vector_norm(
     g: jit_utils.GraphContext,
     self,
     ord,
-    dim: Optional[Sequence[int]],
+    dim: Sequence[int] | None,
     keepdim: bool,
     dtype,
 ):
