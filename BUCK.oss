@@ -15,7 +15,7 @@ define_buck_targets()
 cxx_library(
     name = "pthreadpool",
     srcs = ['caffe2/utils/threadpool/pthreadpool-cpp.cc', 'caffe2/utils/threadpool/thread_pool_guard.cpp', 'caffe2/utils/threadpool/ThreadPool.cc'],
-    deps = [':caffe2_headers', '//third_party:cpuinfo', '//third_party:glog', '//c10:c10', '//third_party:FXdiv'],
+    deps = [':caffe2_headers', '//third_party:cpuinfo', '//third_party:glog', '//c10:c10', '//third_party:FXdiv', '//third_party:pthreadpool'],
     exported_deps = ['//third_party:pthreadpool'],
     compiler_flags = ['-Wno-unused-function'],
     preferred_linkage = "static",
