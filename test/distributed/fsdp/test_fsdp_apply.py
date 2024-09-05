@@ -8,14 +8,14 @@ import torch.nn as nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import (
-    CUDAInitMode,
+    DEVICEInitMode,
     FSDPInitMode,
     FSDPTest,
     NestedWrappedModule,
     TransformerWithSharedParams,
 )
-from torch.testing._internal.common_utils import run_tests, TEST_WITH_DEV_DBG_ASAN
-
+from torch.testing._internal.common_utils import run_tests, TEST_WITH_DEV_DBG_ASAN, TEST_CUDA
+from torch.testing._internal.common_device_type import instantiate_device_type_tests
 
 if not dist.is_available():
     print("Distributed not available, skipping tests", file=sys.stderr)
@@ -64,40 +64,68 @@ class TestApply(FSDPTest):
         )
 
     @skip_if_lt_x_gpu(2)
-    def test_nested_module_apply(self):
+    def test_nested_module_apply(self, device):
         """Tests that ``apply()`` modifies parameter values in-place on a
         non-FSDP-root nested FSDP-wrapped model."""
-        nested_wrapped_module = NestedWrappedModule.init(
-            self.process_group,
-            FSDPInitMode.RECURSIVE,
-            CUDAInitMode.CUDA_AFTER,
-        )
+        if TEST_CUDA:
+            nested_wrapped_module = NestedWrappedModule.init(
+                self.process_group,
+                FSDPInitMode.RECURSIVE,
+                DEVICEInitMode.DEVICE_AFTER,
+            )
+        else:
+            fsdp_kwargs = {"device_id":device}
+            nested_wrapped_module = NestedWrappedModule.init(
+                self.process_group,
+                FSDPInitMode.RECURSIVE,
+                DEVICEInitMode.DEVICE_AFTER,
+                fsdp_kwargs = fsdp_kwargs,
+            )
         self._check_apply(nested_wrapped_module)
 
     @skip_if_lt_x_gpu(2)
-    def test_transformer_module_apply(self):
+    def test_transformer_module_apply(self, device):
         """Tests that ``apply()`` modifies parameter values in-place on an
         FSDP-wrapped transformer model with shared parameters."""
-        transformer = TransformerWithSharedParams.init(
-            self.process_group,
-            FSDPInitMode.RECURSIVE,
-            CUDAInitMode.CUDA_AFTER,
-        )
+        if TEST_CUDA:
+            transformer = TransformerWithSharedParams.init(
+                self.process_group,
+                FSDPInitMode.RECURSIVE,
+                DEVICEInitMode.DEVICE_AFTER,
+            )
+        else:
+            fsdp_kwargs = {"device_id":device}
+            transformer = TransformerWithSharedParams.init(
+                self.process_group,
+                FSDPInitMode.RECURSIVE,
+                DEVICEInitMode.DEVICE_AFTER,
+                fsdp_kwargs = fsdp_kwargs,
+            )
         self._check_apply(transformer)
 
     @skip_if_lt_x_gpu(2)
-    def test_apply_in_summon_raises_error(self):
+    def test_apply_in_summon_raises_error(self, device):
         """Tests that calling ``apply()`` on an FSDP instance inside the
         ``summon_full_params()`` context raises an error."""
-        transformer = TransformerWithSharedParams.init(
-            self.process_group,
-            FSDPInitMode.RECURSIVE,
-            CUDAInitMode.CUDA_AFTER,
-        )
+        if TEST_CUDA:
+            transformer = TransformerWithSharedParams.init(
+                self.process_group,
+                FSDPInitMode.RECURSIVE,
+                DEVICEInitMode.DEVICE_AFTER,
+            )
+        else:
+            fsdp_kwargs = {"device_id":device}
+            transformer = TransformerWithSharedParams.init(
+                self.process_group,
+                FSDPInitMode.RECURSIVE,
+                DEVICEInitMode.DEVICE_AFTER,
+                fsdp_kwargs = fsdp_kwargs,
+            )
         with transformer.summon_full_params(transformer):
             with self.assertRaisesRegex(ValueError, "expected to be in states"):
                 transformer.apply(self._init_linear_weights)
 
-
+devices = ("cuda", "hpu")
+instantiate_device_type_tests(TestApply, globals(), only_for=devices)
 if __name__ == "__main__":
     run_tests()
