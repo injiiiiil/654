@@ -100,10 +100,7 @@ class TestFSDPExecOrder(FSDPTest):
 
     @property
     def device(self):
-        if TEST_CUDA:
-            return torch.device("cuda")
-        else:
-            return torch.device("hpu", torch.hpu.current_device())
+        return torch.device("cuda") if TEST_CUDA else torch.device("hpu", torch.hpu.current_device())
 
     @skip_if_lt_x_gpu(2)
     @parametrize(
