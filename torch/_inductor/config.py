@@ -674,8 +674,6 @@ unsafe_ignore_unsupported_triton_autotune_args: bool = False
 
 # Adds NVTX annotations aroung training phases
 annotate_training: bool = os.environ.get("TORCHINDUCTOR_ANNOTATE_TRAINING", "0") == "1"
-# Adds NVTX annotations aroung each buffer computation
-annotate_buffers: bool = os.environ.get("TORCHINDUCTOR_ANNOTATE_BUFFERS", "0") == "1"
 
 
 # config specific to codegen/cpp.py

@@ -3150,10 +3150,6 @@ class Scheduler:
 
     def _codegen(self) -> None:
         for node in self.nodes:
-            if config.annotate_buffers:
-                V.graph.wrapper_code.writeline(
-                    f"buffer_annotation = nvtx.device_range_start('{node.get_name()}')"
-                )
             try:
                 log.debug(
                     "Generating code for node %s with estimated runtime %f",
@@ -3223,11 +3219,6 @@ class Scheduler:
                 device = node.get_device()
                 if device is not None and self.get_backend(device).ready_to_flush():
                     self.flush()
-
-            if config.annotate_buffers:
-                V.graph.wrapper_code.writeline(
-                    "nvtx.device_range_end(buffer_annotation)"
-                )
 
         if self.current_device and device_need_guard(self.current_device.type):
             # exit the outermost CUDA device guard. this is

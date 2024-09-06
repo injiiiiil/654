@@ -580,7 +580,7 @@ class WrapperCodeGen(CodeGen):
             """,
             strip=True,
         )
-        if config.annotate_training or config.annotate_buffers:
+        if config.annotate_training:
             self.header.writeline("from torch.cuda import nvtx")
 
     def write_kernel_autotune_defs_header(self) -> None:
