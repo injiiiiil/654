@@ -49,10 +49,7 @@ class DenseModel(torch.nn.Module):
 # TODO: Consolidate DeviceMesh based FSDP and HSDP test cases.
 class TestHSDPWithDeviceMeshAndDTensor(DTensorTestBase):
     def _create_model(self, device, device_mesh=None):
-        if TEST_CUDA:
-            device_id=self.device_type
-        else:
-            device_id=device
+        device_id=self.device_type if TEST_CUDA else device
         if device_mesh:
             model = FSDP(
                 DenseModel().to(device_id),
@@ -78,10 +75,7 @@ class TestHSDPWithDeviceMeshAndDTensor(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(4)
     def test_hsdp_init_with_device_mesh(self, device):
-        if TEST_CUDA:
-            device_id=self.device_type
-        else:
-            device_id=device
+        device_id=self.device_type if TEST_CUDA else device
         mesh_2d = init_device_mesh(self.device_type, (2, self.world_size // 2))
         model, optim = self._create_model(device_id, mesh_2d)
 
@@ -116,10 +110,7 @@ class TestHSDPWithDeviceMeshAndDTensor(DTensorTestBase):
     @skip_if_lt_x_gpu(4)
     @parametrize("offload_to_cpu", [True, False])
     def test_dtensor_sharded_tensor_state_dict_identical(self, device, offload_to_cpu):
-        if TEST_CUDA:
-            device_id=self.device_type
-        else:
-            device_id=device
+        device_id=self.device_type if TEST_CUDA else device
         mesh_2d = init_device_mesh(self.device_type, (2, self.world_size // 2))
         model, optim = self._create_model(device_id,mesh_2d)
 
@@ -189,10 +180,7 @@ class TestHSDPWithDeviceMeshAndDTensor(DTensorTestBase):
     @skip_if_lt_x_gpu(4)
     @parametrize("offload_to_cpu", [True, False])
     def test_dtensor_sharded_optim_load_state_dict(self, device, offload_to_cpu):
-        if TEST_CUDA:
-            device_id=self.device_type
-        else:
-            device_id=device
+        device_id=self.device_type if TEST_CUDA else device
         mesh_2d = init_device_mesh(self.device_type, (2, self.world_size // 2))
         model, optim = self._create_model(device_id, mesh_2d)
 
@@ -247,10 +235,7 @@ class TestHSDPWithDeviceMeshAndDTensor(DTensorTestBase):
     @skip_if_lt_x_gpu(4)
     @parametrize("offload_to_cpu", [True, False])
     def test_dtensor_sharded_model_load_state_dict(self, device, offload_to_cpu):
-        if TEST_CUDA:
-            device_id=self.device_type
-        else:
-            device_id=device
+        device_id=self.device_type if TEST_CUDA else device
         mesh_2d = init_device_mesh(self.device_type, (2, self.world_size // 2))
         model, optim = self._create_model(device_id, mesh_2d)
 
@@ -288,10 +273,7 @@ class TestHSDPWithDeviceMeshAndDTensor(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(4)
     def test_root_module_is_not_FSDP(self, device):
-        if TEST_CUDA:
-            device_id=self.device_type
-        else:
-            device_id=device
+        device_id=self.device_type if TEST_CUDA else device
         class FakeMPModel(torch.nn.Module):
             def __init__(self, device_mesh):
                 super().__init__()
