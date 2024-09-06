@@ -1,6 +1,7 @@
 # Owner(s): ["oncall: distributed"]
 import sys
 import contextlib
+import unittest
 from copy import deepcopy
 from functools import partial
 
@@ -18,7 +19,6 @@ from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 from torch.testing._internal.common_utils import run_tests, TestCase, TEST_CUDA
 from torch.utils.checkpoint import checkpoint
 from torch.testing._internal.common_device_type import instantiate_device_type_tests
-HAS_HPU=True if(hasattr(torch,"hpu") and torch.hpu.is_available()) else False
 
 _SAVED_PREFIX = "_saved_"
 GRAD_FN_NEXT_FUNCTIONS = "next_functions"
@@ -193,16 +193,16 @@ class CheckpointWrapperTest(TestCase):
                 use_reentrant=use_reentrant,
             ).to(device)
             x = torch.randn(10000, 256, requires_grad=True).to(device)
-            if HAS_HPU == True:
-                torch.hpu.reset_peak_memory_stats()
-                loss = a(x).sum()
-                loss.backward()
-                torch.hpu.max_memory_allocated()
-            else:
+            if TEST_CUDA:
                 torch.cuda.reset_peak_memory_stats()
                 loss = a(x).sum()
                 loss.backward()
                 torch.cuda.max_memory_allocated()
+            else:
+                torch.hpu.reset_peak_memory_stats()
+                loss = a(x).sum()
+                loss.backward()
+                torch.hpu.max_memory_allocated()
 
         functional_no_reentrant = test(
             use_checkpointing=True, use_wrapper=False, use_reentrant=False
