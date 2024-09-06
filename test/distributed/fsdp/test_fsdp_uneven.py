@@ -27,10 +27,7 @@ if TEST_WITH_DEV_DBG_ASAN:
 class TestUnevenParamShard(FSDPTest):
     def _get_ref_results(self, device, model, input, my_lr):
         with torch.no_grad():
-            if TEST_CUDA:
-                to_device = self.rank
-            else:
-                to_device = device
+            to_device = self.rank if TEST_CUDA else device
             # Compute one iteration local output.
             weight = model.weight.T.clone().to(to_device)
             v = torch.Tensor(input[self.rank]).to(to_device)
@@ -44,10 +41,7 @@ class TestUnevenParamShard(FSDPTest):
 
     @skip_if_lt_x_gpu(2)
     def test_one_iteration(self, device):
-        if TEST_CUDA:
-            to_device = self.rank
-        else:
-            to_device = device
+        to_device = self.rank if TEST_CUDA else device
         """Test FSDP with uneven divide of parameter shards."""
         model = Linear(3, 3, bias=False)
         input = torch.rand(8, 3)
