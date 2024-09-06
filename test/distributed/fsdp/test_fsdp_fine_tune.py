@@ -114,10 +114,7 @@ class TestFSDPFineTune(FSDPTest):
             device_id=self.device_type
         seq = self._init_seq_module(device_id)
         policy = ModuleWrapPolicy({nn.Linear})
-        if TEST_CUDA:
-            fsdp_kwargs = {}
-        else:
-            fsdp_kwargs = {"device_id": device_id}
+        fsdp_kwargs = {} if TEST_CUDA else {"device_id": device_id}
         seq = FSDP(
             seq,
             auto_wrap_policy=policy,
@@ -244,10 +241,7 @@ class TestFSDPFineTune(FSDPTest):
             device_id=self.device_type
         seq = self._init_multi_traversal_module(device_id)
         policy = ModuleWrapPolicy({nn.Linear})
-        if TEST_CUDA:
-            fsdp_kwargs = {}
-        else:
-            fsdp_kwargs = {"device_id": device_id}
+        fsdp_kwargs = {} if TEST_CUDA else {"device_id": device_id}
         fsdp_seq = FSDP(
             copy.deepcopy(seq),
             auto_wrap_policy=policy,
@@ -304,10 +298,7 @@ class TestFSDPFineTune(FSDPTest):
             device_id=self.device_type
         seq = self._init_seq_module(device_id)
         policy = ModuleWrapPolicy({nn.Linear})
-        if TEST_CUDA:
-            fsdp_kwargs = {}
-        else:
-            fsdp_kwargs = {"device_id": device_id}
+        fsdp_kwargs = {} if TEST_CUDA else {"device_id": device_id}
         fsdp_seq = FSDP(
             copy.deepcopy(seq),
             auto_wrap_policy=policy,
