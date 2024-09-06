@@ -250,10 +250,8 @@ class TestFSDPFineTune(FSDPTest):
             forward_prefetch=forward_prefetch,
             **fsdp_kwargs
         )
-        if TEST_CUDA:
-            ddp_seq = DDP(copy.deepcopy(seq), device_ids=[self.rank])
-        else:
-            ddp_seq = DDP(copy.deepcopy(seq), device_ids=[device_id])
+        to_device = self.rank if TEST_CUDA else device_id
+        ddp_seq = DDP(copy.deepcopy(seq), device_ids=[to_device])
         fsdp_optim = torch.optim.Adam(fsdp_seq.parameters(), lr=1e-2)
         ddp_optim = torch.optim.Adam(ddp_seq.parameters(), lr=1e-2)
         torch.manual_seed(self.rank + 1)
@@ -306,10 +304,8 @@ class TestFSDPFineTune(FSDPTest):
             use_orig_params=use_orig_params,
             **fsdp_kwargs
         )
-        if TEST_CUDA:
-            ddp_seq = DDP(copy.deepcopy(seq), device_ids=[self.rank])
-        else:
-            ddp_seq = DDP(copy.deepcopy(seq), device_ids=[device_id])
+        to_device = self.rank if TEST_CUDA else device_id
+        ddp_seq = DDP(copy.deepcopy(seq), device_ids=[to_device])
         fsdp_optim = torch.optim.Adam(fsdp_seq.parameters(), lr=1e-2)
         ddp_optim = torch.optim.Adam(ddp_seq.parameters(), lr=1e-2)
         torch.manual_seed(self.rank + 1)
