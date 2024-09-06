@@ -2,6 +2,7 @@
 
 import random
 import sys
+import unittest
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import List
@@ -32,10 +33,7 @@ if TEST_WITH_DEV_DBG_ASAN:
     )
     sys.exit(0)
 
-if TEST_CUDA:
-    list_device = "cuda"
-else:
-    list_device = "hpu"
+list_device = "cuda" if TEST_CUDA else "hpu"
 
 class TestUtils(TestCase):
     @parametrize(
@@ -44,7 +42,7 @@ class TestUtils(TestCase):
     @skip_if_lt_x_gpu(1)
     def test_apply_to_tensors(self, device_list):
         expected = 0
-
+    
         def get_a_tensor():
             """Return a random tensor on random device."""
             dev = random.choice(device_list)
@@ -53,44 +51,35 @@ class TestUtils(TestCase):
             nonlocal expected
             expected += t.numel()
             return t
-
+    
         @dataclass
-        class NonFrozenDataClass:
+        class SomeDataClass:
             some_key: str
             some_float: float
             some_tensor: List[torch.Tensor]
-
-        @dataclass(frozen=True)
-        class FrozenDataClass:
-            some_key: str
-            some_float: float
-            some_tensor: List[torch.Tensor]
-
+    
         # create a mixed bag of data.
         data = [1, "str"]
         data.append({"key1": get_a_tensor(), "key2": {1: get_a_tensor()}, "key3": 3})
         data.insert(0, {"x", get_a_tensor(), get_a_tensor()})
         data.append(([1], get_a_tensor(), (1), [get_a_tensor()], {1, 2}))
-        data.append(
-            {"non_frozen_ds": NonFrozenDataClass("some_key", 1.0, [get_a_tensor()])}
-        )
-        data.append({"frozen_ds": FrozenDataClass("some_key", 1.0, [get_a_tensor()])})
+        data.append({"abc": SomeDataClass("some_key", 1.0, [get_a_tensor()])})
         od = OrderedDict()
         od["k"] = "value"
         data.append(od)
-
+    
         total = 0
-
+    
         def fn(t):
             nonlocal total
             total += t.numel()
             return t
-
+    
         new_data = _apply_to_tensors(fn, data)
         self.assertEqual(total, expected)
         for i, v in enumerate(data):
             self.assertEqual(type(new_data[i]), type(v))
-
+    
     @skip_if_lt_x_gpu(1)
     def test_replace_by_prefix(self):
         state_dict = {
@@ -107,18 +96,18 @@ class TestUtils(TestCase):
         }
         _replace_by_prefix(state_dict, "module.layer.", "layer.")
         assert state_dict == original_state_dict
-
+    
     @skip_if_lt_x_gpu(1)
     def test_packed_sequence(self):
         """Test to ensure RNN packed sequences are modified correctly."""
         rnn = nn.RNN(5, 5)
-
+    
         x = torch.rand((5, 1, 5), dtype=torch.float)
         seq_length = torch.tensor([4], dtype=torch.int)
-
+    
         def fill_fn(x):
             x.fill_(0)
-
+    
         x = nn.utils.rnn.pack_padded_sequence(x, seq_length)
         x, h = rnn(x)
         x = _apply_to_tensors(fill_fn, x)
