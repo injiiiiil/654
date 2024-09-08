@@ -6400,7 +6400,11 @@ class StorageBox(MutableBox):
             """
             heavy_ops = ["exp", "sigmoid"]  # a list of heavy ops
             fn_str = loops.inner_fn_str()
-            return any((op + "(") in fn_str for op in heavy_ops)
+            multi_users = (
+                users > config.realize_opusers_threshold
+                and self.inner_fn_opcount() > config.realize_opcount_threshold - 2
+            )
+            return any((op + "(") in fn_str for op in heavy_ops) or multi_users
 
         if (
             users > 1
