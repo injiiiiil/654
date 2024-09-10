@@ -1160,7 +1160,17 @@ void flash_attention_kernel_impl(
     double dropout_p,
     bool is_causal,
     std::optional<Tensor> attn_mask,
-    std::optional<double> scale) {
+    std::optional<double> scale,
+    int64_t q_zp,
+    double q_scale,
+    int64_t k_zp,
+    double k_scale,
+    int64_t v_zp,
+    double v_scale,
+    int64_t a_zp,
+    double a_scale,
+    int64_t o_zp,
+    double o_scale) {
   auto q_seq_len = query.size(2);
 
   // When q_seq_len and k_seq_len are long enough,
