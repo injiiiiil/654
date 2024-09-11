@@ -113,7 +113,7 @@ struct Vectorized<c10::qint32> {
       Vectorized<c10::qint32> zero_point,
       Vectorized<c10::qint32> q_six) {
         return __riscv_vmin_vv_i32m2(
-            __riscv_vmax_vv_i32m2(__riscv_vle32_v_i32m2(vals, vl), __riscv_vle32_v_i32m2(zero_point.vals, vl), vl), 
+            __riscv_vmax_vv_i32m2(__riscv_vle32_v_i32m2(vals, vl), __riscv_vle32_v_i32m2(zero_point.vals, vl), vl),
             __riscv_vle32_v_i32m2(q_six.vals, vl),
             vl);
     }
@@ -136,21 +136,21 @@ struct Vectorized<c10::qint32> {
 
 template <>
 Vectorized<c10::qint32> inline maximum(const Vectorized<c10::qint32>& a, const Vectorized<c10::qint32>& b) {
-	return a.maximum(b);
+    return a.maximum(b);
 }
 
 template <>
 Vectorized<c10::qint32> inline operator*(
     const Vectorized<c10::qint32>& a,
     const Vectorized<c10::qint32>& b) {
-	return __riscv_vmul_vv_i32m2(a, b, vl);
+    return __riscv_vmul_vv_i32m2(a, b, vl);
 }
 
 template <>
 Vectorized<c10::qint32> inline operator+(
     const Vectorized<c10::qint32>& a,
     const Vectorized<c10::qint32>& b) {
-	return __riscv_vadd_vv_i32m2(a, b, vl);
+    return __riscv_vadd_vv_i32m2(a, b, vl);
 }
 
 }

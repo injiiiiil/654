@@ -60,9 +60,9 @@ public:
     vuint32m2_t and_u32 = __riscv_vand_vx_u32m2(mask_u32, 0x01, vl);
     vbool16_t  bool_vec = __riscv_vmseq_vx_u32m2_b16(and_u32, 0x01, vl);
     vfloat32m2_t res = __riscv_vmerge_vvm_f32m2(
-      __riscv_vle32_v_f32m2(a.values, vl), 
-      __riscv_vle32_v_f32m2(b.values, vl), 
-      bool_vec, 
+      __riscv_vle32_v_f32m2(a.values, vl),
+      __riscv_vle32_v_f32m2(b.values, vl),
+      bool_vec,
       vl);
     __riscv_vse32_v_f32m2(vec.values, res, vl);
     return vec;
@@ -131,7 +131,7 @@ public:
   }
 
   Vectorized<float> isnan() const {
-    Vectorized<float> res;   
+    Vectorized<float> res;
     vfloat32m2_t tmp = __riscv_vle32_v_f32m2(values, vl);
     vuint32m2_t classify= __riscv_vfclass_v_u32m2(tmp, vl);
     vbool16_t isSNaN = __riscv_vmseq_vx_u32m2_b16(classify, 0x100, vl);
@@ -141,7 +141,7 @@ public:
     vuint32m2_t vec_u32 = __riscv_vmerge_vxm_u32m2(zero_vec, 0xFFFFFFFF, isNaN, vl);
     vfloat32m2_t vec_f32 = __riscv_vreinterpret_v_u32m2_f32m2(vec_u32);
     __riscv_vse32_v_f32m2(res.values, vec_f32, vl);
-    return res; 
+    return res;
   }
 
   bool has_inf_nan() const {
@@ -165,7 +165,7 @@ public:
   }
 
   Vectorized<float> abs() const {
-    vfloat32m2_t vec = __riscv_vle32_v_f32m2(values, vl); 
+    vfloat32m2_t vec = __riscv_vle32_v_f32m2(values, vl);
     return Vectorized<float>(__riscv_vfabs_v_f32m2(vec, vl));
   }
   Vectorized<float> angle() const {
@@ -318,7 +318,7 @@ public:
   }
   Vectorized<float> reciprocal() const {
     vfloat32m2_t res = __riscv_vfdiv_vv_f32m2(
-      __riscv_vfmv_v_f_f32m2(1.0f, vl), 
+      __riscv_vfmv_v_f_f32m2(1.0f, vl),
       __riscv_vle32_v_f32m2(values, vl),
       vl);
     return Vectorized<float>(res);
@@ -332,13 +332,13 @@ public:
 
   Vectorized<float> operator==(const Vectorized<float>& other) const {
     vbool16_t cmp_res = __riscv_vmfeq_vv_f32m2_b16(
-      __riscv_vle32_v_f32m2(values, vl), 
-      __riscv_vle32_v_f32m2(other.values, vl), 
+      __riscv_vle32_v_f32m2(values, vl),
+      __riscv_vle32_v_f32m2(other.values, vl),
       vl);
     vuint32m2_t merge_res = __riscv_vmerge_vvm_u32m2(
-      __riscv_vmv_v_x_u32m2(0x0, vl), 
-      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl), 
-      cmp_res, 
+      __riscv_vmv_v_x_u32m2(0x0, vl),
+      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl),
+      cmp_res,
       vl);
     vfloat32m2_t res = __riscv_vreinterpret_v_u32m2_f32m2(merge_res);
     return Vectorized<float>(res);
@@ -346,13 +346,13 @@ public:
 
   Vectorized<float> operator!=(const Vectorized<float>& other) const {
     vbool16_t cmp_res = __riscv_vmfeq_vv_f32m2_b16(
-      __riscv_vle32_v_f32m2(values, vl), 
-      __riscv_vle32_v_f32m2(other.values, vl), 
+      __riscv_vle32_v_f32m2(values, vl),
+      __riscv_vle32_v_f32m2(other.values, vl),
       vl);
     vuint32m2_t merge_res = __riscv_vmerge_vvm_u32m2(
-      __riscv_vmv_v_x_u32m2(0x0, vl), 
-      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl), 
-      cmp_res, 
+      __riscv_vmv_v_x_u32m2(0x0, vl),
+      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl),
+      cmp_res,
       vl);
     vfloat32m2_t res = __riscv_vreinterpret_v_u32m2_f32m2(__riscv_vnot_v_u32m2(merge_res, vl));
     return Vectorized<float>(res);
@@ -360,13 +360,13 @@ public:
 
   Vectorized<float> operator<(const Vectorized<float>& other) const {
     vbool16_t cmp_res = __riscv_vmflt_vv_f32m2_b16(
-      __riscv_vle32_v_f32m2(values, vl), 
-      __riscv_vle32_v_f32m2(other.values, vl), 
+      __riscv_vle32_v_f32m2(values, vl),
+      __riscv_vle32_v_f32m2(other.values, vl),
       vl);
     vuint32m2_t merge_res = __riscv_vmerge_vvm_u32m2(
-      __riscv_vmv_v_x_u32m2(0x0, vl), 
-      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl), 
-      cmp_res, 
+      __riscv_vmv_v_x_u32m2(0x0, vl),
+      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl),
+      cmp_res,
       vl);
     vfloat32m2_t res = __riscv_vreinterpret_v_u32m2_f32m2(merge_res);
     return Vectorized<float>(res);
@@ -374,13 +374,13 @@ public:
 
   Vectorized<float> operator<=(const Vectorized<float>& other) const {
     vbool16_t cmp_res = __riscv_vmfle_vv_f32m2_b16(
-      __riscv_vle32_v_f32m2(values, vl), 
-      __riscv_vle32_v_f32m2(other.values, vl), 
+      __riscv_vle32_v_f32m2(values, vl),
+      __riscv_vle32_v_f32m2(other.values, vl),
       vl);
     vuint32m2_t merge_res = __riscv_vmerge_vvm_u32m2(
-      __riscv_vmv_v_x_u32m2(0x0, vl), 
-      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl), 
-      cmp_res, 
+      __riscv_vmv_v_x_u32m2(0x0, vl),
+      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl),
+      cmp_res,
       vl);
     vfloat32m2_t res = __riscv_vreinterpret_v_u32m2_f32m2(merge_res);
     return Vectorized<float>(res);
@@ -388,13 +388,13 @@ public:
 
   Vectorized<float> operator>(const Vectorized<float>& other) const {
     vbool16_t cmp_res = __riscv_vmfgt_vv_f32m2_b16(
-      __riscv_vle32_v_f32m2(values, vl), 
-      __riscv_vle32_v_f32m2(other.values, vl), 
+      __riscv_vle32_v_f32m2(values, vl),
+      __riscv_vle32_v_f32m2(other.values, vl),
       vl);
     vuint32m2_t merge_res = __riscv_vmerge_vvm_u32m2(
-      __riscv_vmv_v_x_u32m2(0x0, vl), 
-      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl), 
-      cmp_res, 
+      __riscv_vmv_v_x_u32m2(0x0, vl),
+      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl),
+      cmp_res,
       vl);
     vfloat32m2_t res = __riscv_vreinterpret_v_u32m2_f32m2(merge_res);
     return Vectorized<float>(res);
@@ -402,13 +402,13 @@ public:
 
   Vectorized<float> operator>=(const Vectorized<float>& other) const {
     vbool16_t cmp_res = __riscv_vmfge_vv_f32m2_b16(
-      __riscv_vle32_v_f32m2(values, vl), 
-      __riscv_vle32_v_f32m2(other.values, vl), 
+      __riscv_vle32_v_f32m2(values, vl),
+      __riscv_vle32_v_f32m2(other.values, vl),
       vl);
     vuint32m2_t merge_res = __riscv_vmerge_vvm_u32m2(
-      __riscv_vmv_v_x_u32m2(0x0, vl), 
-      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl), 
-      cmp_res, 
+      __riscv_vmv_v_x_u32m2(0x0, vl),
+      __riscv_vmv_v_x_u32m2(UINT32_MAX, vl),
+      cmp_res,
       vl);
     vfloat32m2_t res = __riscv_vreinterpret_v_u32m2_f32m2(merge_res);
     return Vectorized<float>(res);
@@ -449,8 +449,8 @@ inline Vectorized<float> Vectorized<float>::frac() const {
 template <>
 Vectorized<float> inline maximum(const Vectorized<float>& a, const Vectorized<float>& b) {
   vbool16_t mask = __riscv_vmand_mm_b16(
-    __riscv_vmfeq_vv_f32m2_b16(a, a, vl), 
-    __riscv_vmfeq_vv_f32m2_b16(b, b, vl), 
+    __riscv_vmfeq_vv_f32m2_b16(a, a, vl),
+    __riscv_vmfeq_vv_f32m2_b16(b, b, vl),
     vl);
   vfloat32m2_t max_res = __riscv_vfmax_vv_f32m2(a, b, vl);
   vfloat32m2_t res = __riscv_vmerge_vvm_f32m2(__riscv_vfmv_v_f_f32m2(NAN, vl), max_res, mask, vl);
@@ -460,8 +460,8 @@ Vectorized<float> inline maximum(const Vectorized<float>& a, const Vectorized<fl
 template <>
 Vectorized<float> inline minimum(const Vectorized<float>& a, const Vectorized<float>& b) {
   vbool16_t mask = __riscv_vmand_mm_b16(
-    __riscv_vmfeq_vv_f32m2_b16(a, a, vl), 
-    __riscv_vmfeq_vv_f32m2_b16(b, b, vl), 
+    __riscv_vmfeq_vv_f32m2_b16(a, a, vl),
+    __riscv_vmfeq_vv_f32m2_b16(b, b, vl),
     vl);
   vfloat32m2_t min_res = __riscv_vfmin_vv_f32m2(a, b, vl);
   vfloat32m2_t res = __riscv_vmerge_vvm_f32m2(__riscv_vfmv_v_f_f32m2(NAN, vl), min_res, mask, vl);

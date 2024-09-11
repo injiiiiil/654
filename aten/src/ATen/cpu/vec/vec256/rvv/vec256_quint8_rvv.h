@@ -42,7 +42,7 @@ struct Vectorized<c10::quint8> {
         vuint8m2_t vec_val = __riscv_vmv_v_x_u8m2(val.val_, vl);
         __riscv_vse8_v_u8m2(vals, vec_val, vl);
     }
-    
+
     Vectorized(const Vectorized<c10::quint8>& other) {
         vuint8m2_t other_val = __riscv_vle8_v_u8m2(other.vals, vl);
         __riscv_vse8_v_u8m2(vals, other_val, vl);
@@ -61,7 +61,7 @@ struct Vectorized<c10::quint8> {
         Vectorized<c10::quint8> res;
         vuint8m2_t zero_vec = __riscv_vmv_v_x_u8m2(0, vl);
         vuint8m2_t vec = __riscv_vle8_v_u8m2_tu(zero_vec, reinterpret_cast<const value_type*>(ptr), count);
-        __riscv_vse8_v_u8m2(res.vals, vec, vl); 
+        __riscv_vse8_v_u8m2(res.vals, vec, vl);
         return res;
     }
 
@@ -77,19 +77,19 @@ struct Vectorized<c10::quint8> {
         vuint64m2_t uint_val1 = __riscv_vslidedown_vx_u64m2(u64_vec, 1, 4);
         vuint64m2_t uint_val2 = __riscv_vslidedown_vx_u64m2(u64_vec, 2, 4);
         vuint64m2_t uint_val3 = __riscv_vslidedown_vx_u64m2(u64_vec, 3, 4);
-        
+
         vuint8m2_t u8_val0 = __riscv_vreinterpret_v_u64m2_u8m2(uint_val0);
         vuint8m2_t u8_val1 = __riscv_vreinterpret_v_u64m2_u8m2(uint_val1);
         vuint8m2_t u8_val2 = __riscv_vreinterpret_v_u64m2_u8m2(uint_val2);
         vuint8m2_t u8_val3 = __riscv_vreinterpret_v_u64m2_u8m2(uint_val3);
 
-        vfloat32m2_t float_val0 = 
+        vfloat32m2_t float_val0 =
             __riscv_vfcvt_f_x_v_f32m2(__riscv_vreinterpret_v_u32m2_i32m2(__riscv_vzext_vf4_u32m2(__riscv_vlmul_trunc_v_u8m2_u8mf2(u8_val0), 8)), 8);
-        vfloat32m2_t float_val1 = 
+        vfloat32m2_t float_val1 =
             __riscv_vfcvt_f_x_v_f32m2(__riscv_vreinterpret_v_u32m2_i32m2(__riscv_vzext_vf4_u32m2(__riscv_vlmul_trunc_v_u8m2_u8mf2(u8_val1), 8)), 8);
-        vfloat32m2_t float_val2 = 
+        vfloat32m2_t float_val2 =
             __riscv_vfcvt_f_x_v_f32m2(__riscv_vreinterpret_v_u32m2_i32m2(__riscv_vzext_vf4_u32m2(__riscv_vlmul_trunc_v_u8m2_u8mf2(u8_val2), 8)), 8);
-        vfloat32m2_t float_val3 = 
+        vfloat32m2_t float_val3 =
             __riscv_vfcvt_f_x_v_f32m2(__riscv_vreinterpret_v_u32m2_i32m2(__riscv_vzext_vf4_u32m2(__riscv_vlmul_trunc_v_u8m2_u8mf2(u8_val3), 8)), 8);
 
         auto val0 =
@@ -113,19 +113,19 @@ struct Vectorized<c10::quint8> {
         vuint64m2_t uint_val1 = __riscv_vslidedown_vx_u64m2(u64_vec, 1, 4);
         vuint64m2_t uint_val2 = __riscv_vslidedown_vx_u64m2(u64_vec, 2, 4);
         vuint64m2_t uint_val3 = __riscv_vslidedown_vx_u64m2(u64_vec, 3, 4);
-        
+
         vuint8m2_t u8_val0 = __riscv_vreinterpret_v_u64m2_u8m2(uint_val0);
         vuint8m2_t u8_val1 = __riscv_vreinterpret_v_u64m2_u8m2(uint_val1);
         vuint8m2_t u8_val2 = __riscv_vreinterpret_v_u64m2_u8m2(uint_val2);
         vuint8m2_t u8_val3 = __riscv_vreinterpret_v_u64m2_u8m2(uint_val3);
 
-        vfloat32m2_t float_val0 = 
+        vfloat32m2_t float_val0 =
             __riscv_vfcvt_f_x_v_f32m2(__riscv_vreinterpret_v_u32m2_i32m2(__riscv_vzext_vf4_u32m2(__riscv_vlmul_trunc_v_u8m2_u8mf2(u8_val0), 8)), 8);
-        vfloat32m2_t float_val1 = 
+        vfloat32m2_t float_val1 =
             __riscv_vfcvt_f_x_v_f32m2(__riscv_vreinterpret_v_u32m2_i32m2(__riscv_vzext_vf4_u32m2(__riscv_vlmul_trunc_v_u8m2_u8mf2(u8_val1), 8)), 8);
-        vfloat32m2_t float_val2 = 
+        vfloat32m2_t float_val2 =
             __riscv_vfcvt_f_x_v_f32m2(__riscv_vreinterpret_v_u32m2_i32m2(__riscv_vzext_vf4_u32m2(__riscv_vlmul_trunc_v_u8m2_u8mf2(u8_val2), 8)), 8);
-        vfloat32m2_t float_val3 = 
+        vfloat32m2_t float_val3 =
             __riscv_vfcvt_f_x_v_f32m2(__riscv_vreinterpret_v_u32m2_i32m2(__riscv_vzext_vf4_u32m2(__riscv_vlmul_trunc_v_u8m2_u8mf2(u8_val3), 8)), 8);
 
         auto val0 = (Vectorized<float>(float_val0) - zero_point) * scale;
@@ -175,7 +175,7 @@ struct Vectorized<c10::quint8> {
         vuint8m2_t vec2 = __riscv_vlmul_ext_v_u8mf2_u8m2(__riscv_vnclipu_wx_u8mf2(vecshi2, 0, __RISCV_VXRM_RDN, 8));
         vuint8m2_t vec3 = __riscv_vlmul_ext_v_u8mf2_u8m2(__riscv_vnclipu_wx_u8mf2(vecshi3, 0, __RISCV_VXRM_RDN, 8));
 
-        vuint8m2_t res; 
+        vuint8m2_t res;
         res = __riscv_vslideup_vx_u8m2(vec0, vec1, 8, vl);
         res = __riscv_vslideup_vx_u8m2(res, vec2, 16, vl);
         res = __riscv_vslideup_vx_u8m2(res, vec3, 24, vl);
@@ -183,14 +183,14 @@ struct Vectorized<c10::quint8> {
     }
 
     Vectorized<c10::quint8> maximum(Vectorized<c10::quint8> b) const {
-	return __riscv_vmaxu_vv_u8m2(
+    return __riscv_vmaxu_vv_u8m2(
           __riscv_vle8_v_u8m2(vals, vl),
           __riscv_vle8_v_u8m2(b.vals, vl),
           vl);
     }
 
     Vectorized<c10::quint8> minimum(Vectorized<c10::quint8> b) const {
-	return __riscv_vminu_vv_u8m2(
+    return __riscv_vminu_vv_u8m2(
           __riscv_vle8_v_u8m2(vals, vl),
           __riscv_vle8_v_u8m2(b.vals, vl),
           vl);
@@ -204,7 +204,7 @@ struct Vectorized<c10::quint8> {
       Vectorized<c10::quint8> zero_point,
       Vectorized<c10::quint8> q_six) {
         return __riscv_vminu_vv_u8m2(
-          __riscv_vmaxu_vv_u8m2(__riscv_vle8_v_u8m2(vals, vl), __riscv_vle8_v_u8m2(zero_point.vals, vl), vl), 
+          __riscv_vmaxu_vv_u8m2(__riscv_vle8_v_u8m2(vals, vl), __riscv_vle8_v_u8m2(zero_point.vals, vl), vl),
           __riscv_vle8_v_u8m2(q_six.vals, vl),
           vl);
     }
@@ -306,7 +306,7 @@ struct Vectorized<c10::quint8> {
         vuint8m2_t vec2 = __riscv_vlmul_ext_v_u8mf2_u8m2(__riscv_vnclipu_wx_u8mf2(vecu2, 0, __RISCV_VXRM_RDN, 8));
         vuint8m2_t vec3 = __riscv_vlmul_ext_v_u8mf2_u8m2(__riscv_vnclipu_wx_u8mf2(vecu3, 0, __RISCV_VXRM_RDN, 8));
 
-        vuint8m2_t res; 
+        vuint8m2_t res;
         res = __riscv_vslideup_vx_u8m2(vec0, vec1, 8, vl);
         res = __riscv_vslideup_vx_u8m2(res, vec2, 16, vl);
         res = __riscv_vslideup_vx_u8m2(res, vec3, 24, vl);
@@ -317,7 +317,7 @@ struct Vectorized<c10::quint8> {
 
 template <>
 Vectorized<c10::quint8> inline maximum(const Vectorized<c10::quint8>& a, const Vectorized<c10::quint8>& b) {
-	return a.maximum(b);
+    return a.maximum(b);
 }
 
 }
