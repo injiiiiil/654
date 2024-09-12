@@ -39,6 +39,9 @@ class Allocator:
             del self.allocated[ptr]
             return True
 
+    def is_allocated(self, ptr):
+        return ptr in self.allocated
+
     def tensor_from_meta(self, meta):
         # Usual case, we're receiving a known Tensor
         found_base = self.allocated.get(meta.data_ptr, None)
@@ -116,6 +119,7 @@ class _Daemon:
         global CURR_DEVICE_IDX
         empty_res = object()
         allocator = Allocator()
+        host_allocator = Allocator()
 
         # Serve all requests
         while True:
@@ -125,6 +129,12 @@ class _Daemon:
             if cmd == "deviceCount":
                 assert len(args) == 0
                 res = NUM_DEVICES
+            elif cmd == "isPinnedPtr":
+                res = host_allocator.is_allocated(args[0])
+            elif cmd == "hostMalloc":
+                res = host_allocator.malloc(*args)
+            elif cmd == "hostFree":
+                res = host_allocator.free(*args)
             elif cmd == "getDevice":
                 res = CURR_DEVICE_IDX
             elif cmd == "uncheckedSetDevice":
