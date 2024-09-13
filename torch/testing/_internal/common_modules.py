@@ -16,7 +16,7 @@ from torch.testing._internal.common_dtype import (
     floating_types, floating_and_complex_types_and, get_all_fp_dtypes)
 from torch.testing._internal.common_device_type import (
     _TestParametrizer, _update_param_kwargs, expectedFailureMPS, toleranceOverride, tol,
-    skipCUDAIfCudnnVersionLessThan, skipCUDAIfRocm, precisionOverride, skipMeta, skipMPS, skipMPSVersionIfLessThan,
+    skipCUDAIfCudnnVersionLessThan, skipCUDAIfRocm, precisionOverride, skipMeta, skipMPS,
     skipCUDAVersionIn)
 from torch.testing._internal.common_methods_invocations import DecorateInfo
 from torch.testing._internal.common_nn import (
@@ -1937,7 +1937,9 @@ def module_inputs_torch_nn_RMSNorm(module_info, device, dtype, requires_grad, tr
         normalized_shape = m.normalized_shape
         weight = m.weight
         dims = [ndim - i - 1 for i in range(len(normalized_shape))]
-        result = i * torch.rsqrt(i.pow(2).mean(dim=dims, keepdim=True) + m.eps)
+        upcasted_i = i.float()
+        result = upcasted_i * torch.rsqrt(upcasted_i.pow(2).mean(dim=dims, keepdim=True) + m.eps)
+        result = result.type_as(i)
         if weight is not None:
             result *= weight
         return result
@@ -3178,6 +3180,66 @@ rnn_gru_lstm_module_info_decorators = (
 
 # Start of module error inputs functions.
 
+def module_error_inputs_torch_nn_Linear(module_info, device, dtype, requires_grad, training, **kwargs):
+    make_input = partial(make_tensor, device=device, dtype=dtype, requires_grad=requires_grad)
+    samples = [
+        ErrorModuleInput(
+            ModuleInput(
+                constructor_input=FunctionInput("10", 20),
+                forward_input=FunctionInput(make_input(3, 10)),
+            ),
+            error_on=ModuleErrorEnum.CONSTRUCTION_ERROR,
+            error_type=TypeError,
+            error_regex=r"Expected int for in_features but got <class 'str'>"
+        ),
+        ErrorModuleInput(
+            ModuleInput(
+                constructor_input=FunctionInput(10, 20.7),
+                forward_input=FunctionInput(make_input(3, 10)),
+            ),
+            error_on=ModuleErrorEnum.CONSTRUCTION_ERROR,
+            error_type=TypeError,
+            error_regex=r"Expected int for out_features but got <class 'float'>"
+        ),
+    ]
+    return samples
+
+
+def module_error_inputs_torch_nn_Bilinear(module_info, device, dtype, requires_grad, training, **kwargs):
+    make_input = partial(make_tensor, device=device, dtype=dtype, requires_grad=requires_grad)
+    samples = [
+        ErrorModuleInput(
+            ModuleInput(
+                constructor_input=FunctionInput("10", 20, 30),
+                forward_input=FunctionInput(make_input(3, 10), make_input(3, 20)),
+            ),
+            error_on=ModuleErrorEnum.CONSTRUCTION_ERROR,
+            error_type=TypeError,
+            error_regex=r"Expected int for in1_features but got <class 'str'>"
+        ),
+        ErrorModuleInput(
+            ModuleInput(
+                constructor_input=FunctionInput(10, 20.7, 30),
+                forward_input=FunctionInput(make_input(3, 10), make_input(3, 20)),
+            ),
+            error_on=ModuleErrorEnum.CONSTRUCTION_ERROR,
+            error_type=TypeError,
+            error_regex=r"Expected int for in2_features but got <class 'float'>"
+        ),
+        ErrorModuleInput(
+            ModuleInput(
+                constructor_input=FunctionInput(10, 20, "30"),
+                forward_input=FunctionInput(make_input(3, 10), make_input(3, 20)),
+            ),
+            error_on=ModuleErrorEnum.CONSTRUCTION_ERROR,
+            error_type=TypeError,
+            error_regex=r"Expected int for out_features but got <class 'str'>"
+        ),
+    ]
+    return samples
+
+
+
 def module_error_inputs_torch_nn_RNN_GRU_Cell(module_info, device, dtype, requires_grad, training, **kwargs):
     make_input = partial(make_tensor, device=device, dtype=dtype, requires_grad=requires_grad)
     samples = [
@@ -3353,6 +3415,9 @@ def module_error_inputs_torch_nn_Pad3d(module_info, device, dtype, requires_grad
     ]
 
 
+_macos15_or_newer = torch.backends.mps.is_available() and torch.backends.mps.is_macos_or_newer(15, 0)
+
+
 # Database of ModuleInfo entries in alphabetical order.
 module_db: List[ModuleInfo] = [
     ModuleInfo(torch.nn.AdaptiveAvgPool1d,
@@ -3449,7 +3514,7 @@ module_db: List[ModuleInfo] = [
                module_inputs_func=module_inputs_torch_nn_BatchNorm2d,
                skips=(
                    # See https://github.com/pytorch/pytorch/issues/134580
-                   DecorateInfo(expectedFailureMPS, 'TestModule', 'test_memory_format'),
+                   DecorateInfo(expectedFailureMPS, 'TestModule', 'test_memory_format', active_if=operator.itemgetter('training')),
                    # tracking here rather than in the list in test_aotdispatch.py as eval mode passes
                    # RuntimeError: tried to get Double out of SymInt
                    DecorateInfo(
@@ -3827,12 +3892,14 @@ module_db: List[ModuleInfo] = [
                )),
     ModuleInfo(torch.nn.Linear,
                module_inputs_func=module_inputs_torch_nn_Linear,
+               module_error_inputs_func=module_error_inputs_torch_nn_Linear,
                skips=(
                    # No channels_last support for Linear currently.
                    DecorateInfo(unittest.skip("Skipped!"), 'TestModule', 'test_memory_format'),)
                ),
     ModuleInfo(torch.nn.Bilinear,
                module_inputs_func=module_inputs_torch_nn_Bilinear,
+               module_error_inputs_func=module_error_inputs_torch_nn_Bilinear,
                decorators=[
                    DecorateInfo(
                        toleranceOverride({
@@ -4057,11 +4124,15 @@ module_db: List[ModuleInfo] = [
                ),
     ModuleInfo(torch.nn.Hardswish,
                module_inputs_func=module_inputs_torch_nn_Hardswish,
-               skips=(
+               skips=None if _macos15_or_newer else (
                    # Fails on backward check on MPS
                    # See https://github.com/pytorch/pytorch/issues/107214
                    DecorateInfo(
-                       skipMPSVersionIfLessThan(15, 0)
+                       unittest.expectedFailure,
+                       'TestModule',
+                       'test_memory_format',
+                       active_if=operator.itemgetter('training'),
+                       device_type='mps',
                    ),),
                supports_gradgrad=False),
     ModuleInfo(torch.nn.Hardtanh,
@@ -4176,11 +4247,15 @@ module_db: List[ModuleInfo] = [
                ),
     ModuleInfo(torch.nn.ReLU,
                module_inputs_func=module_inputs_torch_nn_ReLU,
-               skips=(
+               skips=None if _macos15_or_newer else (
                    # Fails on backward check on MPS
                    # See https://github.com/pytorch/pytorch/issues/107214
                    DecorateInfo(
-                       skipMPSVersionIfLessThan(15, 0)
+                       unittest.expectedFailure,
+                       'TestModule',
+                       'test_memory_format',
+                       active_if=operator.itemgetter('training'),
+                       device_type='mps',
                    ),)
                ),
     ModuleInfo(torch.nn.LeakyReLU,
@@ -4214,11 +4289,15 @@ module_db: List[ModuleInfo] = [
                ),
     ModuleInfo(torch.nn.Sigmoid,
                module_inputs_func=module_inputs_torch_nn_Sigmoid,
-               skips=(
+               skips=None if _macos15_or_newer else (
                    # Fails on backward check on MPS
                    # See https://github.com/pytorch/pytorch/issues/107214
                    DecorateInfo(
-                       skipMPSVersionIfLessThan(15, 0)
+                       unittest.expectedFailure,
+                       'TestModule',
+                       'test_memory_format',
+                       active_if=operator.itemgetter('training'),
+                       device_type='mps',
                    ),)
                ),
     ModuleInfo(torch.nn.LogSigmoid,
@@ -4273,20 +4352,28 @@ module_db: List[ModuleInfo] = [
                ),
     ModuleInfo(torch.nn.Tanh,
                module_inputs_func=module_inputs_torch_nn_Tanh,
-               skips=(
+               skips=None if _macos15_or_newer else (
                    # Fails on backward check on MPS
                    # See https://github.com/pytorch/pytorch/issues/107214
                    DecorateInfo(
-                       skipMPSVersionIfLessThan(15, 0)
+                       unittest.expectedFailure,
+                       'TestModule',
+                       'test_memory_format',
+                       active_if=operator.itemgetter('training'),
+                       device_type='mps',
                    ),)
                ),
     ModuleInfo(torch.nn.Tanhshrink,
                module_inputs_func=module_inputs_torch_nn_Tanhshrink,
-               skips=(
+               skips=None if _macos15_or_newer else (
                    # Fails on backward check on MPS
                    # See https://github.com/pytorch/pytorch/issues/107214
                    DecorateInfo(
-                       skipMPSVersionIfLessThan(15, 0)
+                       unittest.expectedFailure,
+                       'TestModule',
+                       'test_memory_format',
+                       active_if=operator.itemgetter('training'),
+                       device_type='mps',
                    ),)
                ),
     ModuleInfo(torch.nn.Threshold,
