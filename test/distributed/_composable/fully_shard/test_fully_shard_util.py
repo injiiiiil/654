@@ -2,6 +2,8 @@
 
 import sys
 
+import pytest
+
 import torch
 import torch.distributed as dist
 from torch.distributed._composable import fully_shard
@@ -12,7 +14,14 @@ from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 from torch.testing._internal.common_dist_composable import CompositeModel, UnitModule
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import FSDPTest
-from torch.testing._internal.common_utils import run_tests, TEST_WITH_DEV_DBG_ASAN
+from torch.testing._internal.common_utils import (
+    run_tests,
+    TEST_WITH_DEV_DBG_ASAN,
+    TestCase,
+)
+
+
+is_cuda_8_9 = torch.cuda.is_available() and torch.cuda.get_device_capability() >= (8, 9)
 
 
 if not dist.is_available():
@@ -110,6 +119,21 @@ class TestUtils(FSDPTest):
                 ],
             ],
         )
+
+
+class TestUtilsSingleDevice(TestCase):
+    @pytest.mark.skipif(not is_cuda_8_9, reason="requires SM89 compatible machine")
+    def test_foreach_copy_float8(self):
+        for dtype in [
+            torch.float8_e4m3fn,
+            torch.float8_e4m3fnuz,
+            torch.float8_e5m2,
+            torch.float8_e5m2fnuz,
+        ]:
+            src = [torch.zeros(2, 2, device="cuda", dtype=dtype)] * 2
+            dst = [torch.zeros(2, 2, device="cuda", dtype=dtype)] * 2
+            # needed by fully_shard(Float8Linear)
+            torch._foreach_copy_(src, dst)
 
 
 if __name__ == "__main__":
