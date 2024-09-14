@@ -18,7 +18,7 @@ from .. import config, ir
 from ..utils import _align, ALIGN_BYTES, cache_on_self, sympy_product
 from ..virtualized import V
 from .aoti_hipify_utils import maybe_hipify_code_wrapper
-from .common import IndentedBuffer
+from .common import IndentedBuffer, Kernel
 from .cpp_utils import (
     cexpr,
     DEVICE_TO_ATEN,
@@ -66,6 +66,8 @@ class CppWrapperCpu(WrapperCodeGen):
         self.cached_output_id = count()
         self.scalar_to_tensor_id = count()
         self.custom_op_wrapper_loaded = False
+        # For GEMM kernels that must be initialized and are resolved at linking.
+        self.initialized_kernels: Dict[str, Kernel] = {}
         self.expr_printer = cexpr
 
     def generate_kernel_call(
@@ -86,7 +88,7 @@ class CppWrapperCpu(WrapperCodeGen):
         """
         Generates kernel call code.
 
-        gpu: Defines whether the backend is GPU. Otherwise the backend is CPU.
+        cuda: Defines whether the backend is GPU. Otherwise the backend is CPU.
 
         triton: Defines whether the GPU backend uses Triton for codegen.
                 Otherwise it uses the CUDA language for codegen.
@@ -657,11 +659,22 @@ class CppWrapperCpu(WrapperCodeGen):
 
     def codegen_model_kernels(self):
         self.prefix.writeline("namespace {")
+
+        # Tell compiler we need to link with the non-mangled symbols
+        for kernel in self.initialized_kernels.values():
+            assert hasattr(
+                kernel, "get_signature"
+            ), f"{kernel} must have get_signature implemented"
+            signature = kernel.get_signature()
+            self.prefix.writeline(f'extern "C" {signature};')
+
         self.prefix.writeline(
             "class AOTInductorModelKernels : public AOTInductorModelKernelsBase {"
         )
         self.prefix.writeline("  public:")
-        declare_kernel = set(self.src_to_kernel.values())
+        declare_kernel = set(self.src_to_kernel.values()) - set(
+            self.initialized_kernels.keys()
+        )
         declare_kernel.update(
             entry[0] for entry in self.user_defined_kernel_cache.values()
         )
@@ -673,6 +686,13 @@ class CppWrapperCpu(WrapperCodeGen):
             self.prefix.writeline(
                 maybe_hipify_code_wrapper(f"    CUfunction {kernel}{{nullptr}};")
             )
+        for name, kernel in self.initialized_kernels.items():
+            assert hasattr(
+                kernel, "get_signature"
+            ), f"{kernel} must have get_signature implemented"
+            kernel_ptr = f"(*{name})"
+            signature = kernel.get_signature().replace(name, kernel_ptr)
+            self.prefix.writeline(f"    {signature} = torch::aot_inductor::{name};")
         self.prefix.writeline("};")
         self.prefix.writeline("}  // namespace")
 
@@ -1135,7 +1155,7 @@ class CppWrapperCpu(WrapperCodeGen):
         result.splice(
             f"""
             inductor_entry = CppWrapperCodeCache.load_pybinding(
-                ["std::vector<AtenTensorHandle>"], cpp_wrapper_src, "{self.device}", {len(V.graph.graph_outputs)})
+                ["std::vector<AtenTensorHandle>"], cpp_wrapper_src, {self.device}, {len(V.graph.graph_outputs)})
             """
         )
 
