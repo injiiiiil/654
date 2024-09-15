@@ -360,7 +360,7 @@ To load the state dict for ``optimizer2`` with the state dict of the previous op
         # Copy setup parameters (lr, weight_decay, etc.), in case they differ in the loaded state dict.
         for k, v in state_dict['param_groups'][0].items():
             if k not in ['params', 'param_names']:
-                adapted_state_dict[k] = v
+                adapted_state_dict['param_groups'][0][k] = v
 
         lookup_dict = {'fc1': 'fc', 'fc2': 'fc'}
 
