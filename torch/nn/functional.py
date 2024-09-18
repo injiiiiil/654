@@ -3708,7 +3708,7 @@ def huber_loss(
     Returns:
         Tensor: Huber loss (optionally weighted).
     """
-    if has_torch_function_variadic(input, target):
+    if has_torch_function_variadic(input, target, weight):
         return handle_torch_function(
             huber_loss,
             (input, target, weight),
@@ -3772,7 +3772,7 @@ def l1_loss(
 
     See :class:`~torch.nn.L1Loss` for details.
     """
-    if has_torch_function_variadic(input, target):
+    if has_torch_function_variadic(input, target, weight):
         return handle_torch_function(
             l1_loss,
             (input, target, weight),
@@ -3844,7 +3844,7 @@ def mse_loss(
     Returns:
         Tensor: Mean Squared Error loss (optionally weighted).
     """
-    if has_torch_function_variadic(input, target):
+    if has_torch_function_variadic(input, target, weight):
         return handle_torch_function(
             mse_loss,
             (input, target, weight),
