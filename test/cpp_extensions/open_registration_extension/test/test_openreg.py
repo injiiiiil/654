@@ -67,6 +67,11 @@ class TestOpenReg(TestCase):
 
         self.assertEqual(out, cpu_a.masked_select(cpu_a.gt(0)))
 
+    def test_stream_synchronize(self):
+        stream = torch.Stream(device="openreg:1")
+        stream.synchronize()
+        self.assertEqual(True, stream.query())
+
 
 if __name__ == "__main__":
     run_tests()

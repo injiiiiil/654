@@ -29,6 +29,11 @@ _register_same_name("uncheckedSetDevice")
 _register_same_name("exchangeDevice")
 _register_same_name("malloc", True)
 _register_same_name("free", True)
+_register_same_name("getNewStream")
+_register_same_name("queryStream")
+_register_same_name("getStream")
+_register_same_name("exchangeStream")
+_register_same_name("synchronizeStream")
 
 
 # TODO: replace it with implementing torch.openreg.device
