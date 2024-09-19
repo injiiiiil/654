@@ -27,10 +27,6 @@ if TEST_CUDA:
     if not torch.cuda.is_available():
         print("Test requires CUDA")
         sys.exit(0)
-else:
-    if not torch.hpu.is_available():
-        print("Test requires HPU")
-        sys.exit(0)
 
 class CheckpointWrapperTest(TestCase):
     def test_load_activation_checkpointed_module(self):
