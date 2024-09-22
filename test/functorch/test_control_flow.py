@@ -1348,7 +1348,7 @@ def forward(self, pred_1, x_1):
             (get_scan_combine_fn("add", True), torch.cumsum),
             (get_scan_combine_fn("mul", True), torch.cumprod),
         ]:
-            result = scan_fct(op, x, 0, reverse=reverse, combine_mode=combine_mode)
+            result = scan_fct(op, x, dim=0, reverse=reverse, combine_mode=combine_mode)
             result_exp = _fake_associative_scan(op, xs=x, dim=0, reverse=reverse)
             self.assertEqual(result, result_exp)
             if not reverse:
@@ -1360,7 +1360,7 @@ def forward(self, pred_1, x_1):
         cumsum1 = scan_fct(
             get_scan_combine_fn("add", True),
             x,
-            0,
+            dim=0,
             reverse=reverse,
             combine_mode=combine_mode,
         )
@@ -1574,7 +1574,7 @@ def forward(self, pred_1, x_1):
                 (get_scan_combine_fn("mul", True), torch.cumprod),
             ]:
                 result = associative_scan(
-                    op, x, rnd_scan_dim, reverse=reverse, combine_mode=combine_mode
+                    op, x, dim=rnd_scan_dim, reverse=reverse, combine_mode=combine_mode
                 )
                 result_exp = _fake_associative_scan(
                     op, x, rnd_scan_dim, reverse=reverse
@@ -1646,7 +1646,7 @@ def forward(self, pred_1, x_1):
         result1 = associative_scan(
             get_scan_combine_fn("s5_operator", True),
             elements,
-            0,
+            dim=0,
             combine_mode=combine_mode,
             reverse=reverse,
         )
@@ -1718,7 +1718,7 @@ def forward(self, pred_1, x_1):
         result1 = associative_scan(
             get_scan_combine_fn("tuple_fct", True),
             inp,
-            0,
+            dim=0,
             reverse=reverse,
             combine_mode=combine_mode,
         )
@@ -1791,7 +1791,7 @@ def forward(self, pred_1, x_1):
             torch._dynamo.exc.Unsupported,
             "Observed exception.*",
         ):
-            result = associative_scan(fct_wrong_pytree, inp, 0, combine_mode="generic")
+            result = associative_scan(fct_wrong_pytree, inp, dim=0, combine_mode="generic")
 
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
@@ -1825,7 +1825,7 @@ def forward(self, pred_1, x_1):
         result = associative_scan(
             get_scan_combine_fn("complex_pointwise", True),
             inp,
-            0,
+            dim=0,
             combine_mode=combine_mode,
             reverse=reverse,
         )
@@ -1924,7 +1924,7 @@ def forward(self, pred_1, x_1):
             o = associative_scan(
                 get_scan_combine_fn("add", True),
                 inp,
-                1,
+                dim=1,
                 reverse=reverse,
                 combine_mode=combine_mode,
             )
@@ -1963,14 +1963,14 @@ def forward(self, pred_1, x_1):
             o1 = associative_scan(
                 get_scan_combine_fn("add", True),
                 inp,
-                1,
+                dim=1,
                 combine_mode=combine_mode,
                 reverse=reverse,
             )
             o2 = associative_scan(
                 get_scan_combine_fn("add", True),
                 o1,
-                1,
+                dim=1,
                 combine_mode=combine_mode,
                 reverse=reverse,
             )
@@ -2015,14 +2015,14 @@ def forward(self, pred_1, x_1):
             o1 = associative_scan(
                 get_scan_combine_fn("add", True),
                 inp,
-                1,
+                dim=1,
                 combine_mode=combine_mode,
                 reverse=reverse,
             )
             o2 = associative_scan(
                 get_scan_combine_fn("add", True),
                 o1,
-                0,
+                dim=0,
                 combine_mode=combine_mode,
                 reverse=reverse,
             )
@@ -2188,7 +2188,7 @@ def forward(self, pred_1, x_1):
             out = associative_scan(
                 get_scan_combine_fn("non_pointwise", True),
                 x,
-                0,
+                dim=0,
                 reverse=reverse,
                 combine_mode="pointwise",
             )
@@ -2211,7 +2211,7 @@ def forward(self, pred_1, x_1):
         result1 = associative_scan(
             get_scan_combine_fn("non_pointwise", True),
             x,
-            0,
+            dim=0,
             reverse=reverse,
             combine_mode="generic",
         )
@@ -2954,7 +2954,7 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
         unittest.skip,
         lambda params: (params["combine_mode"] == "pointwise"),
     )
-    def test_pointwise_associative_scan_freevars(self, reverse, device, combine_mode):
+    def test_associative_scan_freevars(self, reverse, device, combine_mode):
         H = torch.rand(2, device=device, requires_grad=True)
 
         def fct_1freevars(x: torch.Tensor, y: torch.Tensor):
@@ -2967,7 +2967,7 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
 
         for fct in [fct_1freevars, fct_2freevars]:
             result = associative_scan(
-                fct, inp, 0, reverse=reverse, combine_mode=combine_mode
+                fct, inp, dim=0, reverse=reverse, combine_mode=combine_mode
             )
             expected_result = _fake_associative_scan(fct, inp, 0, reverse=reverse)
             self.assertEqual(result, expected_result)
@@ -2984,7 +2984,7 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
         unittest.skip,
         lambda params: (params["combine_mode"] == "pointwise"),
     )
-    def test_pointwise_associative_scan_freevars_pytree(
+    def test_associative_scan_freevars_pytree(
         self, reverse, device, combine_mode
     ):
         xf = torch.randn(2, 2, device=device, requires_grad=True)
@@ -3012,7 +3012,7 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
         inp = {"i": x, "j": ([y], [{"o": z}])}
 
         result = associative_scan(
-            fct_pointwise, inp, 0, reverse=reverse, combine_mode=combine_mode
+            fct_pointwise, inp, dim=0, reverse=reverse, combine_mode=combine_mode
         )
         expected_result = _fake_associative_scan(fct_pointwise, inp, 0, reverse=reverse)
         self.assertEqual(result, expected_result)
