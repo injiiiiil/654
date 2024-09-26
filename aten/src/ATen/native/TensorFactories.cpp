@@ -1249,7 +1249,7 @@ Tensor tril_indices_cpu(
     // fill the Tensor with correct values
     index_t* result_data = result.data_ptr<index_t>();
     int64_t i = 0;
-  
+
     index_t r = std::max<int64_t>(0, -offset), c = 0;
     while (i < tril_size) {
       result_data[i] = r;
