@@ -8,6 +8,7 @@ from torch._dynamo.external_utils import (
     call_backward,
     call_hook,
     FakeCompiledAutogradEngine,
+    fill_uninitialized,
 )
 from torch._dynamo.source import GetItemSource, LocalSource
 from torch._dynamo.utils import counters, lazy_format_graph_code, set_locals_to_steal
@@ -58,6 +59,9 @@ def maybe_clone(x):
     return x
 
 
+next_op = 0
+
+
 class AutogradCompilerInstance:
     def __init__(self, compiler_fn) -> None:
         self.compiler_fn = compiler_fn
@@ -94,7 +98,7 @@ class AutogradCompilerInstance:
         self.fx_tracer.root = torch.nn.Module()
         self.fx_tracer.graph = torch.fx.Graph(tracer_cls=PythonKeyTracer)
         self.fx_tracer.tensor_attrs = {}
-        args_proxy, sizes_proxy, scalars_proxy, self.hooks_proxy = (
+        args_proxy, sizes_proxy, self.scalars_proxy, self.hooks_proxy = (
             self.fx_tracer.create_proxy("placeholder", name, (), {})
             for name in self.graph_placeholders
         )
@@ -137,7 +141,7 @@ class AutogradCompilerInstance:
                 )
             else:
                 raise AssertionError("Unexpected scalar type: ", type(val))
-        self.bind_tensors_to_proxies(scalars, scalars_proxy)
+        self.bind_tensors_to_proxies(scalars, self.scalars_proxy)
 
         # TODO(jansel): are all these modes needed?
         self.stack.enter_context(decompose({}))
@@ -146,6 +150,109 @@ class AutogradCompilerInstance:
         self.stack.enter_context(disable_autocast_cache())
         self.stack.enter_context(preserve_node_meta())
         return inputs, sizes, scalars
+
+    def proxy_call_lambda(
+        self,
+        idx,
+        inputs,
+        output_metadatas: List[Optional[Any]],
+    ):
+        with disable_proxy_modes_tracing():
+            # create fake Tensors
+            grad_ins: List[Optional[torch.Tensor]] = []
+            for output_metadata in output_metadatas:
+                if output_metadata is None:
+                    continue
+
+                layout, device, dtype, size = output_metadata
+                grad_ins.append(
+                    torch.empty(size=size, dtype=dtype, layout=layout, device=device)
+                )
+
+            global next_op
+
+            @torch.library.custom_op(  # type: ignore[misc]
+                f"compiled_autograd::cpp_node_op_{next_op}", mutates_args=()
+            )
+            def cpp_node_op_i(
+                inputs: List[torch.Tensor], idx: int
+            ) -> List[torch.Tensor]:
+                print(f"Calling lifted c++ node at idx={idx}")
+                cppouts = torch._C._dynamo.compiled_autograd.call_lambda(inputs, idx)
+                filtered_output_metadatas = [
+                    o for o in output_metadatas if o is not None
+                ]
+                assert len(cppouts) == len(filtered_output_metadatas)
+                # what happens when shit is marked as dynamic...
+                pyouts = []
+                for i, cppout in enumerate(cppouts):
+                    if cppout is None:
+                        layout, device, dtype, size = filtered_output_metadatas[i]
+                        pyouts.append(
+                            torch.empty(
+                                size=size, dtype=dtype, layout=layout, device=device
+                            )
+                        )
+                    else:
+                        # strides could be anything, and can cause issue with
+                        # downstream stride dependent operations
+                        pyouts.append(cppout.clone().contiguous())
+
+                return pyouts
+
+            def _(inputs, idx):
+                grad_ins: List[torch.Tensor] = []
+                for output_metadata in output_metadatas:
+                    if output_metadata is None:
+                        # eager semantics is to not return grads for tensors not requiring them
+                        continue
+
+                    layout, device, dtype, size = output_metadata
+                    grad_ins.append(
+                        torch.empty(
+                            size=size, dtype=dtype, layout=layout, device=device
+                        )
+                    )
+                return grad_ins
+
+            cpp_node_op_i.register_fake(_)
+
+            next_op += 1
+
+        # Undefined tensors in C++ will be passed to Python as None
+        # but custom ops signature does not support Optional[torch.Tensor]
+        # To work around this, we create torch.empty as the interface just for the custom op
+        fill_proxies = self.fx_tracer.create_proxy(
+            kind="call_function",
+            target=fill_uninitialized,
+            args=(self.to_proxy(inputs),),
+            kwargs={},
+        )
+        with disable_proxy_modes_tracing():
+            processed_inputs = [maybe_clone(x) for x in inputs]
+            self.bind_tensors_to_proxies(processed_inputs, fill_proxies)
+
+        cpp_node_proxies = cpp_node_op_i(fill_proxies, self.scalars_proxy[idx])
+        with disable_proxy_modes_tracing():
+            self.bind_tensors_to_proxies(grad_ins, cpp_node_proxies)
+
+        return grad_ins
+        # grad_ins may be torch.empty i.e. None i.e. undefined output variables
+        # but torch.empty is not considered undefined
+        # empty is:
+        # .dim() == 1
+        # .size(0) == 0
+        # unfill_proxies = self.fx_tracer.create_proxy(
+        #     kind="call_function",
+        #     target=unfill_uninitialized,
+        #     args=(self.to_proxy(grad_ins),),
+        #     kwargs={},
+        # )
+        # with disable_proxy_modes_tracing():
+        #     processed_outputs = [maybe_clone(x) for x in grad_ins]
+        #     self.bind_tensors_to_proxies(processed_outputs, unfill_proxies)
+
+        # return processed_outputs
 
     def proxy_call_backward(
         self,
@@ -536,3 +643,4 @@ def reset() -> None:
     assert not in_compiled_autograd_region
     torch._C._dynamo.compiled_autograd.set_autograd_compiler(None)
     torch._C._dynamo.compiled_autograd.set_verbose_logger(None)
+    torch._C._dynamo.compiled_autograd.clear_cache()
