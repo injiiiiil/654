@@ -344,6 +344,7 @@ def mps_ops_modifier(ops):
         'tanh',
         'tensor_split',
         'transpose',
+        'transpose_copy',
         'T',
         'unbind',
         'unflatten',
@@ -438,6 +439,7 @@ def mps_ops_modifier(ops):
         'logical_not',
         'logical_or',
         'logical_xor',
+        'logsumexp',
         'long',
         'masked_fill',
         'masked.mean',
@@ -445,6 +447,7 @@ def mps_ops_modifier(ops):
         'masked.std',
         'masked.sum',
         'masked.var',
+        'masked.logsumexp',
         'matmul',
         'mean',
         'mm',
@@ -690,8 +693,6 @@ def mps_ops_modifier(ops):
         'index_reducemean': None,
         'index_reduceamax': None,
         'index_reduceamin': None,
-        'isneginf': None,
-        'isposinf': None,
         'kthvalue': None,
         'lcm': None,
         'linalg.cholesky': None,
@@ -736,7 +737,7 @@ def mps_ops_modifier(ops):
         'nn.functional.adaptive_avg_pool3d': None,
         'nn.functional.adaptive_max_pool3d': None,
         'nn.functional.interpolatearea': None,
-        'nn.functional.interpolatebicubic': None,
+        'nn.functional.interpolatebicubic': [torch.uint8],
         'nn.functional.interpolatetrilinear': None,
         'nn.functional.max_unpool1dgrad': None,
         'nn.functional.max_unpool2dgrad': None,
@@ -1200,6 +1201,29 @@ class MpsMemoryLeakCheck:
                    f"MPS driver allocated memory was {self.driver_before} and is now {driver_mem_allocated}.")
 
             raise RuntimeError(msg)
+
+class TestAutocastMPS(TestCase):
+
+    def test_matmul_autocast(self):
+        autocast_tensor_A = torch.rand((8, 8), device="mps")
+        autocast_tensor_B = torch.rand((8, 8), device="mps")
+        tensor_A = autocast_tensor_A.clone().detach()
+        tensor_B = autocast_tensor_B.clone().detach()
+        autocast_output_tensor = torch.empty(8, 8)
+        output_tensor = autocast_output_tensor.clone().detach()
+
+        with torch.autocast(device_type="mps"):
+            autocast_output_tensor = torch.mm(autocast_tensor_A, autocast_tensor_B)
+            autocast_output_tensor = torch.mm(autocast_tensor_A, autocast_output_tensor)
+
+        output_tensor = torch.mm(tensor_A, tensor_B)
+        output_tensor = torch.mm(tensor_A, output_tensor)
+
+        self.assertEqual(autocast_output_tensor.dtype, torch.float16, "Autocast output tensor was not expected type float16")
+        self.assertEqual(autocast_output_tensor,
+                         output_tensor.to(torch.float16),
+                         f"Autocast & non-autocast tensors did not match, \
+                         got:\n{autocast_output_tensor} \n{output_tensor.to(torch.float16)}")
 
 # Expand TestCase class with Memory Leak Detection on MPS device
 class TestCaseMPS(TestCase):
@@ -1914,6 +1938,20 @@ class TestMPS(TestCaseMPS):
         self.assertEqual(output_cpu, output_mps)
         self.assertEqual(output_cpu.size(), output_mps.size())
 
+    @xfailIf(product_version < 15.0)
+    @parametrize("dtype", [torch.float16, torch.bfloat16])
+    def test_large_bmm(self, dtype):
+        batch1 = torch.randn(11, 20064, 128, dtype=dtype, device='mps')
+        batch2 = torch.randn(11, 128, 20064, dtype=dtype, device='mps')
+        output_cpu = torch.bmm(batch1.cpu(), batch2.cpu())
+        output_mps = torch.bmm(batch1, batch2)
+
+        # Using the low precision comparison for FP16
+        tol = 1e-2 if dtype == torch.float16 else None
+        self.assertEqual(output_cpu, output_mps, atol=tol, rtol=tol)
+        self.assertEqual(output_cpu.size(), output_mps.size())
+
+
     def test_addr(self):
         A = torch.ones(5, 10).to("mps")
         B = torch.ones(5).to("mps")
@@ -2126,6 +2164,19 @@ class TestMPS(TestCaseMPS):
 
     def test_linear3D_no_bias_backward(self):
         self._linear_helper(in_features=2, out_features=3, shape=((4, 5, 2)), bias=True, backward_pass=True)
+
+    @xfailIf(product_version < 14.0)
+    def test_linear_large(self):
+        # Regression test for https://github.com/pytorch/pytorch/issues/122045
+        x_cpu = torch.randn(9, 1024, 1, device='cpu')
+        w_cpu = torch.randn(50304, 1, device='cpu')
+        x_mps = x_cpu.detach().clone().to('mps')
+        w_mps = w_cpu.detach().clone().to('mps')
+
+        out_cpu = F.linear(x_cpu, w_cpu, None)
+        out_mps = F.linear(x_mps, w_mps, None)
+
+        self.assertEqual(out_cpu, out_mps)
 
     def test_uniform(self):
         low = torch.zeros(5, 5, requires_grad=True)
@@ -2692,6 +2743,12 @@ class TestMPS(TestCaseMPS):
 
         # Expecting the inverted to yield the original signal
         self.assertEqual(ifft_result, signal)
+
+    # Regression test for https://github.com/pytorch/pytorch/issues/135223
+    def test_fftfreq(self):
+        freq_cpu = torch.fft.fftfreq(10**4, device='cpu')
+        freq_mps = torch.fft.fftfreq(10**4, device='mps')
+        self.assertEqual(freq_cpu, freq_mps)
 
     def test_instance_norm(self):
         def helper(shape, eps=1, momentum=0.1, wts=False, channels_last=False, track_running_stats=True, test_module=False):
@@ -5682,6 +5739,10 @@ class TestMPS(TestCaseMPS):
         helper(2, 8, 4, 5, dtype=torch.int32)
         helper(2, 8, 4, 5, dtype=torch.int64)
         helper(2, 8, 4, 5, dtype=torch.bool)
+        # Regression test for https://github.com/pytorch/pytorch/issues/136132
+        x = torch.ones(2, 4, 1, 30, 1, device='mps').sum(dim=-2)
+        self.assertEqual(x.numel(), 8)
+        self.assertEqual(x.max().item(), 30.0)
 
     # Test forward prod
     def test_prod(self):
@@ -6521,6 +6582,18 @@ class TestMPS(TestCaseMPS):
 
             log_result = torch.logaddexp2(x, y)
             log_result_cpu = torch.logaddexp2(cpu_x, cpu_y)
+
+            self.assertEqual(log_result, log_result_cpu)
+
+        helper((2, 8, 4, 5))
+
+    def test_logsumexp(self):
+        def helper(shape):
+            cpu_x = torch.randn(shape, device='cpu', dtype=torch.float, requires_grad=False)
+            x = cpu_x.detach().clone().to('mps')
+
+            log_result = torch.logsumexp(x, -1)
+            log_result_cpu = torch.logsumexp(cpu_x, -1)
 
             self.assertEqual(log_result, log_result_cpu)
 
@@ -7672,6 +7745,11 @@ class TestMPS(TestCaseMPS):
         self.assertEqual(np.arange(7, 1, -1), torch.arange(7, 1, -1, device='mps'))
         self.assertEqual(np.arange(1, 2, .3, dtype=np.float32), torch.arange(1, 2, .3, device='mps'))
         self.assertEqual(np.arange(6.3, dtype=np.float32), torch.arange(6.3, device='mps'))
+        # To be removed
+        if product_version >= 14.0:
+            def do_arange(start=1.2, end=10.3, dtype=torch.bfloat16, device='cpu'):
+                return torch.arange(start, end, device=device, dtype=dtype)
+            self.assertEqual(do_arange(device='mps'), do_arange(device='cpu'))
 
     def test_arange_empty(self):
         out_mps = torch.tensor([], device="mps")
@@ -12158,6 +12236,13 @@ class TestConsistency(TestCaseMPS):
             cpu_grad_inputs = torch.autograd.grad(diff_cpu_out, diff_cpu_arg, grad_outputs=cpu_grad_outputs, allow_unused=True)
             mps_grad_inputs = torch.autograd.grad(diff_mps_out, diff_mps_arg, grad_outputs=mps_grad_outputs, allow_unused=True)
 
+            if (
+                op.name == "nn.functional.pad"
+                and op.variant_test_name in ["replicate", "reflect"]
+                and dtype == torch.float16
+            ):
+                atol = 1e-5
+                rtol = 1.5e-3
             self.assertEqual(cpu_grad_inputs, mps_grad_inputs, atol=atol, rtol=rtol)
 
 

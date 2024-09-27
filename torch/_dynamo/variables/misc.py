@@ -4,7 +4,6 @@ import dataclasses
 import functools
 import inspect
 import itertools
-import os
 import random
 import re
 import sys
@@ -15,7 +14,7 @@ import torch._C
 import torch._numpy as tnp
 import torch.utils._pytree as pytree
 
-from .. import config, polyfills, variables
+from .. import config, variables
 from ..bytecode_transformation import create_call_function, create_instruction
 from ..create_parameter_op import do_not_convert_to_tracable_parameter
 from ..exc import unimplemented
@@ -30,7 +29,6 @@ from ..source import (
 )
 from ..utils import (
     check_unspec_or_constant_args,
-    hashable,
     identity,
     is_tensor_base_attr_getter,
     proxy_args_kwargs,
@@ -43,15 +41,12 @@ from .functions import (
     UserMethodVariable,
     wrap_bound_arg,
 )
+from .nn_module import UnspecializedNNModuleVariable
 from .user_defined import call_random_fn, is_standard_setattr, UserDefinedObjectVariable
 
 
 if TYPE_CHECKING:
     from torch._dynamo.symbolic_convert import InstructionTranslator
-
-POLYFILL_SUPPORTED_PYTHON_MODULE_METHODS = {
-    os.fspath: polyfills.fspath,
-}
 
 
 class NO_SUCH_SUBOBJ:
@@ -111,7 +106,13 @@ class SuperVariable(VariableTracker):
         resolved_class = None
         resolved_attr = None
         search_mro = type_to_use.__mro__
-        start_index = search_mro.index(search_type) + 1
+
+        try:
+            start_index = search_mro.index(search_type) + 1
+        except ValueError:
+            # Corner case where the typevar is not in the mro of the objvar
+            # https://github.com/python/cpython/blob/3.11/Objects/typeobject.c#L8843-L8844
+            return getattr(super(search_type, type_to_use), name), None
         # Implemented based on https://github.com/python/cpython/blob/3.11/Objects/typeobject.c#L8812
         # super has its getattro implementation. The key point is that instead of calling getattr, it checks the
         # attribute in the class __dict__
@@ -393,18 +394,20 @@ class InspectSignatureVariable(VariableTracker):
         super().__init__(**kwargs)
         self.inspected = inspected
 
+        try:
+            if hasattr(self.inspected, "get_function"):
+                self.fn = self.inspected.get_function()
+            elif isinstance(self.inspected, UnspecializedNNModuleVariable):
+                self.fn = self.inspected.value
+            else:
+                self.fn = self.inspected.as_python_constant()
+        except NotImplementedError:
+            unimplemented("inspect.signature with non-constant function")
+
+        self.signature = inspect.signature(self.fn)
+        self.parameters = list(self.signature.parameters.items())
         if isinstance(self.inspected, UserMethodVariable):
-            self.fn = self.inspected.get_function()
-            self.signature = inspect.signature(self.fn)
-            self.parameters = list(self.signature.parameters.items())[1:]
-        elif isinstance(self.inspected, UserFunctionVariable):
-            self.fn = self.inspected.get_function()
-            self.signature = inspect.signature(self.fn)
-            self.parameters = list(self.signature.parameters.items())
-        else:
-            self.fn = self.inspected.as_python_constant()
-            self.signature = inspect.signature(self.fn)
-            self.parameters = list(self.signature.parameters.items())
+            self.parameters = self.parameters[1:]
 
     def var_getattr(self, tx: "InstructionTranslator", name: str) -> "VariableTracker":
         if name == "parameters":
@@ -943,7 +946,7 @@ class AutogradEngineVariable(UserDefinedObjectVariable):
         kwargs: "Dict[str, VariableTracker]",
     ) -> "VariableTracker":
         if name == "queue_callback":
-            if torch._dynamo.compiled_autograd.compiled_autograd_enabled:
+            if torch._dynamo.compiled_autograd.in_compiled_autograd_region:
                 assert (
                     tx.one_graph
                 ), "queue_callback() is only supported when Compiled Autograd is enabled with fullgraph=True"
@@ -999,6 +1002,13 @@ class GetAttrVariable(VariableTracker):
 
     def as_proxy(self):
         return GetAttrVariable.create_getattr_proxy(self.obj.as_proxy(), self.name)
+
+    def as_python_constant(self):
+        constant = self.obj.as_python_constant()
+        try:
+            return getattr(constant, self.name)
+        except AttributeError:
+            raise NotImplementedError(f"{self} is not a constant") from None
 
     def const_getattr(self, tx: "InstructionTranslator", name):
         if not isinstance(self.obj, variables.NNModuleVariable):
@@ -1167,12 +1177,6 @@ class PythonModuleVariable(VariableTracker):
         else:
             attr_value = self.value.__dict__[name]
 
-        if hashable(attr_value):
-            if polyfill_fn := POLYFILL_SUPPORTED_PYTHON_MODULE_METHODS.get(
-                attr_value, None
-            ):
-                return variables.UserFunctionVariable(polyfill_fn)
-
         if self.source:
             new_source = AttrSource(self.source, name)
             return VariableBuilder(tx, new_source)(attr_value)
@@ -1197,9 +1201,6 @@ class TypingVariable(VariableTracker):
                 self.value[args[0].as_python_constant()],
             )
         unimplemented("typing")
-
-    def python_type(self):
-        return type(self.value)
 
     def as_python_constant(self):
         return self.value
@@ -1317,9 +1318,6 @@ class NumpyVariable(VariableTracker):
         kwargs: "Dict[str, VariableTracker]",
     ) -> "VariableTracker":
         unimplemented("numpy")
-
-    def python_type(self):
-        return type(self.value)
 
     def as_python_constant(self):
         return self.value
@@ -1494,9 +1492,6 @@ class ConstantLikeVariable(VariableTracker):
     def __init__(self, value, **kwargs) -> None:
         super().__init__(**kwargs)
         self.value = value
-
-    def python_type(self):
-        return type(self.value)
 
     def as_python_constant(self):
         return self.value
