@@ -1114,7 +1114,7 @@ void ProcessGroupNCCL::waitForFutureOrTimeout(
     try {
       bool result = fut.get();
       if (result) {
-        LOG(INFO) << logPrefix()
+        VLOG(2) << logPrefix()
                   << "future is successfully executed for: " << futDescription;
         if (log) {
           data.strings["status"] = "SUCCESS";
@@ -1182,8 +1182,8 @@ void ProcessGroupNCCL::abortCommsFromMap(
       // TODO: fix `getIndexFromDeviceKey` or fix `DeviceKey`
       gpuGuard.set_index(deviceIndex);
     }
-    LOG(INFO) << logPrefix() << "ProcessGroupNCCL destroying ncclComm_ "
-              << ncclComm->ncclComm_ << " on CUDA device: " << devName;
+    VLOG(2) << logPrefix() << "ProcessGroupNCCL destroying ncclComm_ "
+            << ncclComm->ncclComm_ << " on CUDA device: " << devName;
     ncclComm->ncclCommAbort(abortReason);
     // Note that we don't remove the aborted communicators from the
     // cache. The reason is that if we do remove the communicator
@@ -1195,8 +1195,8 @@ void ProcessGroupNCCL::abortCommsFromMap(
     // their responsibility to destroy the process group and recreate
     // it to recover from errors.
 
-    LOG(INFO) << logPrefix() << "ProcessGroupNCCL destroyed "
-              << " communicator on CUDA device: " << devName;
+    VLOG(2) << logPrefix() << "ProcessGroupNCCL destroyed "
+            << " communicator on CUDA device: " << devName;
   }
 }
 
@@ -1230,14 +1230,13 @@ void ProcessGroupNCCL::shutdown(std::optional<std::string> reason) {
   workMetaListCV_.notify_one();
 
   // lauch abort asynchrounously and wait for it to complete or timeout
-  LOG(INFO) << logPrefix()
-            << "Launching ProcessGroupNCCL abort asynchrounously.";
+  VLOG(2) << logPrefix() << "Launching ProcessGroupNCCL abort asynchrounously.";
   std::future<bool> fut = std::async(
       std::launch::async, [this, &reason]() { return this->abort(reason); });
 
   waitForFutureOrTimeout(
       fut, options_->timeout, "ProcessGroup abort", true, false);
-  LOG(INFO) << logPrefix() << "ProcessGroupNCCL aborts successfully.";
+  VLOG(2) << logPrefix() << "ProcessGroupNCCL aborts successfully.";
 
   // We need to wait for abort to finish before we can safely shut down
   // heartbeat monitoring thread.
@@ -1246,7 +1245,7 @@ void ProcessGroupNCCL::shutdown(std::optional<std::string> reason) {
 }
 
 ProcessGroupNCCL::~ProcessGroupNCCL() {
-  LOG(INFO) << logPrefix() << "ProcessGroupNCCL destructor entered.";
+  VLOG(2) << logPrefix() << "ProcessGroupNCCL destructor entered.";
 
   if (!terminateProcessGroup_.load()) {
     if (rank_ % localDeviceCount_ == 0) {
@@ -1267,18 +1266,18 @@ ProcessGroupNCCL::~ProcessGroupNCCL() {
 #ifdef ENABLE_NCCL_ERROR_CHECKING
   if (ncclCommWatchdogThread_.joinable()) {
     ncclCommWatchdogThread_.join();
-    LOG(INFO) << logPrefix() << "ProcessGroupNCCL watchdog thread joined.";
+    VLOG(2) << logPrefix() << "ProcessGroupNCCL watchdog thread joined.";
   }
   if (ncclHeartbeatMonitorThread_.joinable()) {
     ncclHeartbeatMonitorThread_.join();
-    LOG(INFO) << logPrefix()
-              << "ProcessGroupNCCL heart beat monitor thread joined.";
+    VLOG(2) << logPrefix()
+            << "ProcessGroupNCCL heart beat monitor thread joined.";
   }
 #endif
   if (onCompletionHookThread_.joinable()) {
     onCompletionHookThread_.join();
-    LOG(INFO) << logPrefix()
-              << "ProcessGroupNCCL onCompletionHookThread thread joined.";
+    VLOG(2) << logPrefix()
+            << "ProcessGroupNCCL onCompletionHookThread thread joined.";
   }
 }
 
@@ -1519,7 +1518,7 @@ void ProcessGroupNCCL::heartbeatMonitor() {
           << "Could not acquire GIL within 300 ms on exit, possible GIL induced hang";
     }
   } else {
-    LOG(INFO)
+    VLOG(2)
         << "GIL checker was not registered, perhaps this is a no-python build?";
   }
 
@@ -1584,7 +1583,7 @@ void ProcessGroupNCCL::ncclCommWatchdog() {
   } catch (std::exception& e) {
     if (std::string(e.what()).find("driver shutting down") !=
         std::string::npos) {
-      LOG(INFO)
+      VLOG(2)
           << logPrefix()
           << "main process destroyed cuda before watchdog loop exited, terminating watchdog."
           << " (Watchdog caught exception: " << e.what();
@@ -2303,8 +2302,8 @@ std::shared_ptr<NCCLComm> ProcessGroupNCCL::getNCCLComm(
       globalRankStride, // globalRankStride
       size_); // worldSize
 
-  LOG(INFO) << logPrefix() << "ProcessGroupNCCL created ncclComm_ "
-            << ncclComm->ncclComm_ << " on CUDA device: " << deviceIndex;
+  VLOG(2) << logPrefix() << "ProcessGroupNCCL created ncclComm_ "
+          << ncclComm->ncclComm_ << " on CUDA device: " << deviceIndex;
 
   // At this point NCCL should have been initialized, hence we can accurately
   // get the env value even if NCCL sets it by reading from nccl.conf file
