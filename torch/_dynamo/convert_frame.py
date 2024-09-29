@@ -820,9 +820,7 @@ def _compile(
 
         return guarded_code
 
-    with _use_lazy_graph_module(config.use_lazy_graph_module), compile_context(
-        CompileContext(compile_id)
-    ):
+    with _use_lazy_graph_module(True), compile_context(CompileContext(compile_id)):
         restart_reasons: set[str] = set()
         # This is shared across restarts
         mutated_closure_cell_contents: Set[str] = set()
