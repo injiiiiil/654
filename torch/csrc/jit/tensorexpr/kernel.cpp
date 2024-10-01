@@ -483,7 +483,10 @@ ExprHandle TensorExprKernel::getVarForShape(const c10::ShapeSymbol& ss) {
   if (it == shapeSymbolToVar_.end()) {
     VarHandle var("ss" + std::to_string(-value), kLong);
     shapeSymbolToVar_.emplace(value, var);
+    /* clang complains that move is actually needed, gcc complains otherwise */
+    C10_DIAGNOSTIC_PUSH_AND_IGNORED_IF_DEFINED("-Wredundant-move")
     return std::move(var);
+    C10_DIAGNOSTIC_POP()
   }
   return it->second;
 }
@@ -1020,7 +1023,10 @@ ExprHandle TensorExprKernel::getStrideArg(
         kLong);
     strideArgToVar_[std::pair<size_t, size_t>(
         tensor_input_index, stride_index)] = var;
+    /* clang complains that move is actually needed, gcc complains otherwise */
+    C10_DIAGNOSTIC_PUSH_AND_IGNORED_IF_DEFINED("-Wredundant-move")
     return std::move(var);
+    C10_DIAGNOSTIC_POP()
   }
   return it->second;
 }
@@ -1763,7 +1769,7 @@ void TensorExprKernel::compile() {
 
   // Move output operands from `bufs_` to `bufOutputs_`
   for (auto i : c10::irange(graph_->outputs().size())) {
-    auto& output = graph_->outputs().at(i);
+    auto output = graph_->outputs().at(i);
     if (!bufs_.count(output)) {
       throw malformed_input("cannot find output Tensor");
     }

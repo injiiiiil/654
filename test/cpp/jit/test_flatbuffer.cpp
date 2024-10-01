@@ -1225,14 +1225,14 @@ TEST(FlatbufferTest, OperatorSize1) {
 
   CompilationOptions options;
   mobile::Module bc = jitModuleToMobile(m, options);
-  const auto& func = bc.get_method("forward").function();
+  const auto func = bc.get_method("forward").function();
   ASSERT_EQ(
       func.get_code().operator_input_sizes_.size(),
       func.get_code().operators_.size());
 
   auto buff = save_mobile_module_to_bytes(bc);
   mobile::Module bc2 = parse_mobile_module(buff->data(), buff->size());
-  const auto& func2 = bc.get_method("forward").function();
+  const auto func2 = bc.get_method("forward").function();
   ASSERT_EQ(
       func2.get_code().operator_input_sizes_.size(),
       func2.get_code().operators_.size());
@@ -1288,14 +1288,14 @@ TEST(FlatbufferTest, OperatorTest2) { // NOLINT (use =delete in gtest)
 
     CompilationOptions options;
     mobile::Module bc = jitModuleToMobile(m, options);
-    const auto& func = bc.get_method("test_func").function();
+    const auto func = bc.get_method("test_func").function();
     ASSERT_EQ(
         func.get_code().operator_input_sizes_.size(),
         func.get_code().operators_.size());
 
     auto buff = save_mobile_module_to_bytes(bc);
     mobile::Module bc2 = parse_mobile_module(buff->data(), buff->size());
-    const auto& func2 = bc.get_method("test_func").function();
+    const auto func2 = bc.get_method("test_func").function();
     ASSERT_EQ(
         func2.get_code().operator_input_sizes_.size(),
         func2.get_code().operators_.size());

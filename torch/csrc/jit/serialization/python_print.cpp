@@ -1140,7 +1140,7 @@ struct PythonPrintImpl {
         stmt << ")";
       } break;
       case prim::CallMethod: {
-        const auto& self = node->inputs().at(0);
+        const auto self = node->inputs().at(0);
         const auto& methodName = node->s(attr::name);
         stmt << "(" << useOf(self) << ")"
              << "." << methodName << "(";

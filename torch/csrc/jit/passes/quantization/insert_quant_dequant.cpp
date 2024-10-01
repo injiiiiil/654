@@ -1444,7 +1444,7 @@ void InsertQuantDeQuantHelper::run(
   // observing a potentially mutated value due to some in-place operation
   std::vector<Value*> input_values;
   for (const auto idx : c10::irange(1, method.num_inputs())) {
-    auto& v = graph->inputs()[idx];
+    auto v = graph->inputs()[idx];
     if (v->type()->isSubtypeOf(*TensorType::get())) {
       input_values.push_back(v);
     }
@@ -1651,7 +1651,7 @@ void InsertQuantDeQuantHelper::runForOnDevicePTQ(
   // observing a potentially mutated value due to some in-place operation
   std::vector<Value*> input_values;
   for (const auto idx : c10::irange(1, method.num_inputs())) {
-    auto& v = graph->inputs()[idx];
+    auto v = graph->inputs()[idx];
     if (v->type()->isSubtypeOf(*TensorType::get())) {
       input_values.push_back(v);
     }

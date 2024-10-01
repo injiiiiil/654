@@ -151,7 +151,9 @@ public:
         // no safe toTensorRef method, alas)
         ks = ks | ivalue.unsafeToTensorImpl()->key_set();
       } else if (C10_UNLIKELY(ivalue.isTensorList())) {
+        C10_DIAGNOSTIC_PUSH_AND_IGNORED_IF_DEFINED("-Wdangling-reference")
         for (const at::Tensor& tensor : ivalue.toTensorList()) {
+          C10_DIAGNOSTIC_POP()
           ks = ks | tensor.key_set();
         }
       }

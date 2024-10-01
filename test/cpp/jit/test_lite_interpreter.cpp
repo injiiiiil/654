@@ -1625,7 +1625,7 @@ TEST(LiteInterpreterTest, OperatorSize1) {
   std::stringstream ss;
   m._save_for_mobile(ss);
   mobile::Module bc = _load_for_mobile(ss);
-  const auto& func = bc.get_method("forward").function();
+  const auto func = bc.get_method("forward").function();
   ASSERT_EQ(
       func.get_code().operator_input_sizes_.size(),
       func.get_code().operators_.size());
@@ -1660,7 +1660,7 @@ TEST(LiteInterpreterTest, OperatorTest2) { // NOLINT (use =delete in gtest)
     std::stringstream ss;
     m._save_for_mobile(ss);
     mobile::Module bc = _load_for_mobile(ss);
-    const auto& func = bc.get_method("test_func").function();
+    const auto func = bc.get_method("test_func").function();
     ASSERT_EQ(
         func.get_code().operator_input_sizes_.size(),
         func.get_code().operators_.size());

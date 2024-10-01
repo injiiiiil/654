@@ -641,7 +641,10 @@ py::object toPyObject(IValue ivalue) {
     for (const auto i : c10::irange(list.size())) {
       t[i] = toPyObject(IValue{list.get(i)});
     }
+    /* clang complains that move is actually needed, gcc complains otherwise */
+    C10_DIAGNOSTIC_PUSH_AND_IGNORED_IF_DEFINED("-Wredundant-move")
     return std::move(t);
+    C10_DIAGNOSTIC_POP()
   } else if (ivalue.isTuple()) {
     auto tuple = std::move(ivalue).toTuple();
     const auto& elements = tuple->elements();
@@ -676,7 +679,10 @@ py::object toPyObject(IValue ivalue) {
           .attr("_create_named_tuple")(
               t, unqualName, fieldNames, py::make_tuple(defaults));
     } else {
+      /* clang complains that move is actually needed, gcc complains otherwise */
+      C10_DIAGNOSTIC_PUSH_AND_IGNORED_IF_DEFINED("-Wredundant-move")
       return std::move(t);
+      C10_DIAGNOSTIC_POP()
     }
   } else if (ivalue.isDevice()) {
     return py::cast(std::move(ivalue).toDevice());
@@ -689,7 +695,10 @@ py::object toPyObject(IValue ivalue) {
       py_dict[toPyObject(IValue{pair.key()})] =
           toPyObject(IValue{pair.value()});
     }
+    /* clang complains that move is actually needed, gcc complains otherwise */
+    C10_DIAGNOSTIC_PUSH_AND_IGNORED_IF_DEFINED("-Wredundant-move")
     return std::move(py_dict);
+    C10_DIAGNOSTIC_POP()
   } else if (ivalue.isRRef()) {
 #ifdef USE_RPC
     auto RRefPtr =
