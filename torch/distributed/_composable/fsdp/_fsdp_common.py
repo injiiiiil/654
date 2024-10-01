@@ -10,6 +10,7 @@ import torch._dynamo.compiled_autograd as ca
 import torch.distributed as dist
 import torch.nn as nn
 from torch.distributed._composable.contract import _get_registry
+from torch.distributed.device_mesh import _get_device_handle
 from torch.distributed.tensor import DeviceMesh, DTensor
 from torch.distributed.tensor._dtensor_spec import DTensorSpec
 
@@ -150,3 +151,16 @@ def _cast_fp_tensor(dtype: torch.dtype, x: torch.Tensor) -> torch.Tensor:
     ):
         return x
     return x.to(dtype)
+
+
+def _get_device_handle_from_device(device: Optional[torch.device] = None):
+    if device is None:
+        device_type = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        device_type = device.type
+
+    device_handle = _get_device_handle(device_type)
+
+    if device_handle is None:
+        raise RuntimeError("InValid device handle for device type:", device)
+    return device_handle
