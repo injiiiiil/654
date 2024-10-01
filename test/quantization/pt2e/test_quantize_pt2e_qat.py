@@ -947,6 +947,30 @@ class TestQuantizePT2EQAT_ConvBn_Base(PT2EQATTestCase):
         self.assertTrue(conv_node is not None)
         self.assertTrue(bn_node is None)
 
+    def test_preserve_capture_pre_autograd_graph_tag(self):
+        """
+        Ensure the capture_pre_autograd_graph_tag node meta is preserved.
+        TODO: Remove this test after training IR migration.
+        T199018392
+        """
+        m = self._get_conv_bn_model(has_conv_bias=False, has_bn=True, has_relu=False)
+        m = capture_pre_autograd_graph(m, self.example_inputs)
+        if not capture_pre_autograd_graph_using_training_ir():
+            for node in m.graph.nodes:
+                self.assertTrue(node.meta.get("capture_pre_autograd_graph_tag", False))
+            quantizer = XNNPACKQuantizer()
+            quantizer.set_global(
+                get_symmetric_quantization_config(is_per_channel=False, is_qat=True),
+            )
+            m = prepare_qat_pt2e(m, quantizer)
+            m = convert_pt2e(m)
+            has_tag = False
+            for node in m.graph.nodes:
+                if not node.meta.get("capture_pre_autograd_graph_tag", False):
+                    has_tag = True
+                    break
+            self.assertTrue(has_tag)
+
 
 @skipIfNoQNNPACK
 class TestQuantizePT2EQAT_ConvBn1d(TestQuantizePT2EQAT_ConvBn_Base):

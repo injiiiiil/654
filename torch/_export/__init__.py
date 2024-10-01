@@ -73,6 +73,28 @@ def capture_pre_autograd_graph_warning():
 def print_export_warning():
     log.warning("Using torch.export.export_for_training(...,strict=True)")
 
+def gm_using_training_ir(graph_module):
+    # TODO: clean up this code after training IR migration.
+    # T199018392
+    has_training_ir_batch_norm = False
+    has_deprecated_ir_tag = getattr(graph_module, "capture_pre_autograd_graph_tag", False)
+    for node in graph_module.graph.nodes:
+        if node.op == "call_function":
+            if node.target == torch.ops.aten.batch_norm.default:
+                has_training_ir_batch_norm = True
+            if node.meta.get("capture_pre_autograd_graph_tag", False):
+                has_deprecated_ir_tag = True
+            if node.target in [
+                torch.ops.aten._native_batch_norm_legit.default,
+                torch.ops.aten.cudnn_batch_norm.default,
+                torch.ops.aten.miopen_batch_norm.default,
+            ]:
+                has_deprecated_ir_tag = True
+
+    if has_deprecated_ir_tag and has_training_ir_batch_norm:
+        raise RuntimeError("Conflicting IR detected.")
+    return has_training_ir_batch_norm or not has_deprecated_ir_tag
+
 @compatibility(is_backward_compatible=False)
 def capture_pre_autograd_graph(
     f: torch.nn.Module,
@@ -183,6 +205,10 @@ def capture_pre_autograd_graph(
                 m,
                 range_constraints=range_constraints,
             )
+
+            setattr(module, "capture_pre_autograd_graph_tag", True)  # noqa: B010
+            for node in module.graph.nodes:
+                node.meta["capture_pre_autograd_graph_tag"] = True
 
     error_message = \
         """
