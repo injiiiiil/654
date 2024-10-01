@@ -3083,7 +3083,7 @@ class CppTile2DKernel(CppVecKernel):
                 f"({src}, {ld_src}, {dst}, {ld_dst});"
             )
         if is_store:
-            tile_var = self.cse.newvar()
+            tile_var = self.cse.newvar(dtype=var.dtype)
         elif load_or_store not in self.cse.cache:
             tile_var = self.cse.generate(self.preloads, load_or_store, write=False)
         else:

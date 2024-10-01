@@ -1562,6 +1562,7 @@ class CSE:
         self,
         buffer: IndentedBuffer,
         expr: Union[str, CSEVariable, OpsValue, IndentedBuffer],
+        dtype: torch.dtype = None,
         *,
         bounds: ValueRanges[Any] = ValueRanges.unknown(),
         write=True,
@@ -1582,7 +1583,7 @@ class CSE:
         cache_key = expr.getvalue() if isinstance(expr, IndentedBuffer) else expr
         var = self.cache.get(cache_key, None)
         if not var:
-            var = self.newvar(bounds)
+            var = self.newvar(dtype, bounds)
             self.cache[cache_key] = var
             if write:
                 if V.kernel.current_node:
@@ -1606,11 +1607,58 @@ class CSE:
 
         return var
 
-    def newvar(self, bounds: ValueRanges[Any] = ValueRanges.unknown()) -> CSEVariable:
+    def newvar(
+        self,
+        dtype,
+        bounds: ValueRanges[Any] = ValueRanges.unknown(),
+    ) -> CSEVariable:
         var_name = f"{self.name_prefix}{next(self.iter_buffer_ids)}"
-        var = V.kernel.create_cse_var(var_name, bounds)
+        var = V.kernel.create_cse_var(var_name, bounds, dtype)
         self.varname_map[var_name] = var
         return var
+
+def propagate_dtype(op_name, *args, **kwargs):
+    """
+    Propagate dtype from args to output
+    """
+
+    if len(args) == 1 and isinstance(args[0], CSEVariable):
+        return args[0].dtype
+    elif op_name == "constant":
+        return args[1]  # args[1] is dtype
+    elif op_name == "to_dtype":
+        return args[1]  # args[1] is dtype
+    elif op_name == "to_dtype_bitcast":
+        return args[1]  # Inputs[SrcTensor, target_dtype, original_dtype]
+    elif op_name in ["isnan", "lt"]:
+        return torch.bool
+    elif op_name == "where":
+        return torch.promote_types(*[arg.dtype for arg in args[1:]])
+    elif op_name == "index_expr":
+        return args[1]
+    elif op_name == "masked":
+        return args[0].dtype
+    elif op_name == "load_seed":
+        return torch.float32  # Inputs[string, int]
+    elif op_name == "randint64":
+        return torch.int64
+
+    arg_dtypes = []
+
+    for arg in args:
+        if isinstance(arg, CSEVariable):
+            arg_dtypes.append(arg.dtype)
+        elif isinstance(arg, OpsValue) and isinstance(arg.value, CSEVariable):
+            arg_dtypes.append(arg.value.dtype)
+
+    if len(arg_dtypes) == 2:
+        return torch.promote_types(*arg_dtypes)
+    elif len(arg_dtypes) == 1:
+        return arg_dtypes[0]
+    else:
+        # TODO (arui): how could we handle fallthrough cases
+        # raise RuntimeError(f"Defaults to FP32 for unsupported dtype propagation: {op_name} {args} {kwargs}")
+        return torch.float32
 
 
 class CodeGen:
@@ -1846,8 +1894,11 @@ class Kernel(CodeGen):
                     value = getattr(parent_handler, name)(*args, **kwargs)  # type: ignore[has-type]
 
                     def do_cse(v):
+                        # Need a function to infer output dtype
+                        output_dtype = propagate_dtype(name, *args, **kwargs)
+
                         csevar = V.kernel.cse.generate(
-                            V.kernel.compute, v, bounds=bounds
+                            V.kernel.compute, v, dtype=output_dtype, bounds=bounds
                         )
                         csevar.update_on_args(name, args, kwargs)
                         return csevar
