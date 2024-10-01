@@ -129,6 +129,7 @@ factory_common_args = merge_dicts(
 factory_like_common_args = parse_kwargs(
     """
     input (Tensor): the size of :attr:`input` will determine size of the output tensor.
+    generator (:class:`torch.Generator`, optional): a pseudorandom number generator for sampling
     layout (:class:`torch.layout`, optional): the desired layout of returned tensor.
         Default: if ``None``, defaults to the layout of :attr:`input`.
     dtype (:class:`torch.dtype`, optional): the desired data type of returned Tensor.
@@ -8803,8 +8804,9 @@ Example::
 
 add_docstr(
     torch.rand_like,
-    r"""
-rand_like(input, *, dtype=None, layout=None, device=None, requires_grad=False, memory_format=torch.preserve_format) -> Tensor
+    """
+rand_like(input, *, generator=None, dtype=None, layout=None, device=None, requires_grad=False, \
+memory_format=torch.preserve_format) -> Tensor
 
 Returns a tensor with the same size as :attr:`input` that is filled with
 random numbers from a uniform distribution on the interval :math:`[0, 1)`.
@@ -8815,6 +8817,7 @@ Args:
     {input}
 
 Keyword args:
+    {generator}
     {dtype}
     {layout}
     {device}
@@ -8875,7 +8878,7 @@ Example::
 add_docstr(
     torch.randint_like,
     """
-randint_like(input, low=0, high, \\*, dtype=None, layout=torch.strided, device=None, requires_grad=False, \
+randint_like(input, low=0, high, \\*, generator=None, dtype=None, layout=torch.strided, device=None, requires_grad=False, \
 memory_format=torch.preserve_format) -> Tensor
 
 Returns a tensor with the same shape as Tensor :attr:`input` filled with
@@ -8892,6 +8895,7 @@ Args:
     high (int): One above the highest integer to be drawn from the distribution.
 
 Keyword args:
+    {generator}
     {dtype}
     {layout}
     {device}
@@ -8959,8 +8963,9 @@ Example::
 
 add_docstr(
     torch.randn_like,
-    r"""
-randn_like(input, *, dtype=None, layout=None, device=None, requires_grad=False, memory_format=torch.preserve_format) -> Tensor
+    """
+randn_like(input, *, generator=None, dtype=None, layout=None, device=None, requires_grad=False, \
+memory_format=torch.preserve_format) -> Tensor
 
 Returns a tensor with the same size as :attr:`input` that is filled with
 random numbers from a normal distribution with mean 0 and variance 1. Please refer to :func:`torch.randn` for the
@@ -8971,6 +8976,7 @@ Args:
     {input}
 
 Keyword args:
+    {generator}
     {dtype}
     {layout}
     {device}
