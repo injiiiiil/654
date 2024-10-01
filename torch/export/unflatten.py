@@ -3,6 +3,7 @@ import abc
 import copy
 import logging
 import operator
+import re
 from collections import defaultdict
 from contextlib import contextmanager
 from copy import deepcopy
@@ -68,35 +69,47 @@ def _assign_attr(
     persistent: bool = True,
 ):
     *prefix, field = target.split(".")
+    # We need to generate all submodules of `to_module` that are at `prefix` and
+    # variants of `prefix` that differ only by call name. All of these submodules
+    # will then be assigned `from_obj` at `field` so that they can share this attribute.
+    # For example, if target is foo.bar.f, foo has another call name foo@1,
+    # and bar has other call names bar@1, bar@2, then we will assign f to
+    # foo.bar, foo.bar@1, foo.bar@2, foo@1.bar, foo@1.bar@1, foo@1.bar@2.
+    to_modules = [to_module]
     for item in prefix:
-        t = getattr(to_module, item, None)
+        ts: List[torch.nn.Module] = []
+        for to_module in to_modules:
+            if not hasattr(to_module, item):
+                setattr(to_module, item, torch.nn.Module())
+            ts.extend(
+                t_call  # type: ignore[misc]
+                for k, t_call in to_module._modules.items()
+                if _is_call_name(k, item)
+            )
+        to_modules = ts
 
-        if t is None:
-            t = torch.nn.Module()
-            setattr(to_module, item, t)
-        to_module = t
-
-    if attr_kind == _AttrKind.PARAMETER:
-        assert isinstance(from_obj, torch.nn.Parameter)
-        to_module.register_parameter(field, from_obj)
-    elif attr_kind == _AttrKind.BUFFER:
-        assert isinstance(from_obj, torch.Tensor)
-        to_module.register_buffer(field, from_obj, persistent=persistent)
-    elif attr_kind == _AttrKind.CONSTANT:
-        assert not isinstance(
-            from_obj, FakeScriptObject
-        ), "FakeScriptObject should only exist during tracing."
-        assert isinstance(
-            from_obj,
-            (
-                torch.Tensor,
-                torch.ScriptObject,
-            ),
-        )
-        setattr(to_module, field, from_obj)
-    elif attr_kind == _AttrKind.MODULE:
-        assert isinstance(from_obj, torch.nn.Module)
-        setattr(to_module, field, from_obj)
+    for to_module in to_modules:
+        if attr_kind == _AttrKind.PARAMETER:
+            assert isinstance(from_obj, torch.nn.Parameter)
+            to_module.register_parameter(field, from_obj)
+        elif attr_kind == _AttrKind.BUFFER:
+            assert isinstance(from_obj, torch.Tensor)
+            to_module.register_buffer(field, from_obj, persistent=persistent)
+        elif attr_kind == _AttrKind.CONSTANT:
+            assert not isinstance(
+                from_obj, FakeScriptObject
+            ), "FakeScriptObject should only exist during tracing."
+            assert isinstance(
+                from_obj,
+                (
+                    torch.Tensor,
+                    torch.ScriptObject,
+                ),
+            )
+            setattr(to_module, field, from_obj)
+        elif attr_kind == _AttrKind.MODULE:
+            assert isinstance(from_obj, torch.nn.Module)
+            setattr(to_module, field, from_obj)
 
 
 class InterpreterModule(torch.nn.Module):
@@ -436,9 +449,6 @@ class UnflattenedModule(torch.nn.Module):
             if name not in fqn_order:
                 fqn_order[name] = len(fqn_order)
         _reorder_submodules(self, fqn_order)
-        assert [fqn for fqn, _ in self.named_modules(remove_duplicate=False)] == list(
-            fqn_order.keys()
-        )
         self.graph.lint()
 
     def _print_graph(self):
@@ -644,7 +654,7 @@ def _compute_accessor(parent_fqn: str, child_fqn: str) -> str:
     return ".".join(child_split[len(parent_split) :])
 
 
-def _verify_graph_equivalence(x: torch.nn.Module, y: torch.nn.Module):
+def _check_graph_equivalence(x: torch.nn.Module, y: torch.nn.Module):
     def graph_dump(graph: torch.fx.Graph) -> str:
         ret = []
         nodes_idx: Dict[int, int] = {}
@@ -665,7 +675,7 @@ def _verify_graph_equivalence(x: torch.nn.Module, y: torch.nn.Module):
             nodes_idx[id(node)] = i
         return "\n".join(ret)
 
-    assert graph_dump(x.graph) == graph_dump(y.graph)
+    return graph_dump(x.graph) == graph_dump(y.graph)
 
 
 def _add_spec(gm: torch.nn.Module, spec) -> str:
@@ -724,6 +734,17 @@ def _add_submodule(mod: torch.nn.Module, target: str, module_to_add: torch.nn.Mo
     mod.add_module(field, module_to_add)
 
 
+def _call_name(base: str, n: int) -> str:
+    # Given n >= 0, generate call names to a submodule `base` of the form
+    # `base`, `base@1`, `base@2`, etc.
+    return base if n == 1 else f"{base}@{n-1}"
+
+
+def _is_call_name(call_name: str, base: str) -> bool:
+    # Recognize when call_name = _call_name(base, n) for some n >= 0.
+    return re.match(re.escape(base) + r"(@\d+)?$", call_name) is not None
+
+
 class _ModuleFrame:
     def __init__(
         self,
@@ -753,11 +774,7 @@ class _ModuleFrame:
             self.module = module
         else:
             self.module = InterpreterModule(torch.fx.Graph())
-        if self.module_id in self.seen_modules:
-            self.cached_graph_module = self.seen_modules[self.module_id]
-        else:
-            self.cached_graph_module = None
-            self.seen_modules[self.module_id] = self.module
+        self.seen_modules[self.module_id].append((self.fqn, self.module))
 
         self.graph = self.module.graph
 
@@ -767,16 +784,10 @@ class _ModuleFrame:
 
         self.parent_call_module: Optional[torch.fx.Node] = None
         if parent is not None:
-            accessor = _compute_accessor(parent.fqn, self.fqn)
-            _add_submodule(
-                parent.module,
-                accessor,
-                (
-                    self.module
-                    if self.cached_graph_module is None
-                    else self.cached_graph_module
-                ),
-            )
+            # generate call name for self.fqn
+            child_fqn = _call_name(self.fqn, self.num_calls(self.fqn))
+            accessor = _compute_accessor(parent.fqn, child_fqn)
+            _add_submodule(parent.module, accessor, self.module)
             self.parent_call_module = parent.graph.call_module(accessor)
 
         signature = module_call_graph.get(self.fqn)
@@ -857,6 +868,11 @@ class _ModuleFrame:
             assert self.parent_call_module is not None
             self.parent_call_module.args = tuple(arg_nodes)
             self.parent_call_module.kwargs = kwarg_nodes
+
+    def num_calls(self, fqn):
+        return len(
+            list(filter(lambda x: x[0] == fqn, self.seen_modules[self.module_id]))
+        )
 
     def add_placeholder(self, x):
         assert self.fqn != "", f"Cannot add placeholder {x} to root module"
@@ -1002,8 +1018,39 @@ class _ModuleFrame:
                 proxy_out.meta["val"] = orig_output.meta.get("val")
                 self.parent.node_map[orig_output] = proxy_out
 
-        if self.cached_graph_module is not None:
-            _verify_graph_equivalence(self.cached_graph_module, self.module)
+        num_calls: Dict[str, int] = {}
+        child_fqn = _call_name(self.fqn, self.num_calls(self.fqn))
+        accessor = _compute_accessor(self.parent.fqn, child_fqn)
+        deduplicated = False
+        # Iterate over all previously seen modules, and deduplicate if possible
+        for k, seen_module in self.seen_modules[self.module_id][:-1]:
+            num_calls[k] = num_calls.get(k, 0) + 1
+            seen_child_fqn = _call_name(k, num_calls[k])
+            if _check_graph_equivalence(seen_module, self.module):
+                # Since graphs are equivalent, we can deduplicate.
+                # There are two cases.
+                if k == self.fqn:
+                    # Case 1: The current module has the same fqn as the seen module.
+                    # In this case we have generated a call name that can be optimized away.
+                    # So we remove the current module from the hierarchy and replace
+                    # the current call name with the seen call name in the parent graph.
+                    *prefix, name = accessor.split(".")
+                    _recursive_getattr(self.parent.module, prefix)._modules.pop(name)
+                    seen_accessor = _compute_accessor(self.parent.fqn, seen_child_fqn)
+                    self.parent_call_module.target = seen_accessor  # type: ignore[union-attr]
+                    break
+                elif not deduplicated:
+                    # Case 2: The current module has a different fqn than the seen module.
+                    # In this case we replace the current module with the seen module.
+                    # There should be nothing pointing to the current module any more,
+                    # so it can be garbage collected.
+                    # NOTE: We *do not* replace the current call name with the seen call name
+                    # in the parent graph, because this will lose information on which fqn
+                    # was actually called. However, it is possible that the current call name
+                    # will be optimized away when we find another seen module with the same fqn,
+                    # so we do not break out of the loop yet.
+                    self.parent.module.set_submodule(accessor, seen_module)
+                    deduplicated = True
 
     def copy_node(self, node):
         self.print("copying", node.format_node())
@@ -1117,7 +1164,7 @@ class _ModuleFrame:
 
 def _outline_submodules(orig_graph: torch.fx.Graph, root_module: UnflattenedModule):
     seen_nodes: Dict[str, torch.fx.Node] = {}
-    seen_modules: Dict[int, torch.nn.Module] = {}
+    seen_modules: Dict[int, List[torch.nn.Module]] = defaultdict(list)
     _ModuleFrame(
         orig_graph,
         tuple(orig_graph.nodes),
