@@ -1415,6 +1415,35 @@ class ExportedProgramSerializer(metaclass=Final):
         )
 
 
+def _translate_deserialized_sym_expr(expr: sympy.Expr) -> sympy.Expr:
+    """
+    De-serialized symbolic expressions can differ from their original expressions in structure;
+    we serialize by dumping expressions containing custom torch sympy.Functions into strings,
+    then de-serialize with sympy.sympify(). This pattern matches and translates the de-serialized
+    expressions into their original form.
+    """
+    from torch.utils._sympy.functions import FloorDiv
+
+    def _match_floordiv(x):
+        # matches sympy.floor(Mul(*a, Pow(b, -1)))
+        return (
+            x.func == sympy.floor
+            and (_mul := x.args[0]).func == sympy.Mul
+            and (_pow := _mul.args[-1]).func == sympy.Pow
+            and _pow.args[1] == -1
+        )
+
+    def _translate_floordiv(x):
+        # converts sympy.floor(Mul(*a, Pow(b, -1))),
+        # into FloorDiv(a, b) or FloorDiv(Mul(*a), b).
+        *a, pow_b = x.args[0].args
+        return FloorDiv(sympy.Mul(*a) if len(a) > 1 else a[0], pow_b.args[0])
+
+    # add any translations here
+    expr = expr.replace(_match_floordiv, _translate_floordiv)
+    return expr
+
+
 @final
 class GraphModuleDeserializer(metaclass=Final):
     @dataclasses.dataclass
@@ -1541,6 +1570,7 @@ class GraphModuleDeserializer(metaclass=Final):
                                 compiler_max=vr.upper,  # type: ignore[arg-type]
                             )
 
+            sym = _translate_deserialized_sym_expr(sym)
             return self.shape_env.create_symintnode(sym, hint=hint)
         elif s.type == "as_int":
             assert isinstance(val, int)
@@ -1563,6 +1593,7 @@ class GraphModuleDeserializer(metaclass=Final):
                     self.deserialize_sym_int(SymInt.create(as_expr=SymExpr(str(sym))))
             # then we sympify again using locals to correctly reify with the constructed symbols
             expr = sympy.sympify(val.expr_str, locals=self.symbol_name_to_symbol)
+            expr = _translate_deserialized_sym_expr(expr)  # is this necessary?
             return self.shape_env.create_symboolnode(expr)
         elif s.type == "as_bool":
             assert isinstance(val, bool)
