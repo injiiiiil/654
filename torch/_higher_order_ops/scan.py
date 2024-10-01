@@ -48,6 +48,20 @@ def _extract_carry_and_out(flat_out: List[Any], num_carry: int):
     return flat_out[:num_carry], flat_out[num_carry:]
 
 
+# An custom op that's used for lowering scan in inductor.
+# Compared with aten.select, the lowering rule for this is more specialized
+# to the scan operator. For example, we skips a bunch of checks that we're
+# certain is true for scan.
+@torch.library.custom_op("_scan::unsafe_select", mutates_args=())  # type: ignore[misc]
+def _unsafe_select(t: torch.Tensor, dim: int, idx: int) -> torch.Tensor:
+    return torch.select(t, dim, idx)
+
+
+@torch.library.register_fake("_scan::unsafe_select")
+def _(t, dim, idx):
+    return t.select(dim, 0)
+
+
 def scan(
     combine_fn: Callable[
         [pytree.PyTree, pytree.PyTree], Tuple[pytree.PyTree, pytree.PyTree]
@@ -112,7 +126,6 @@ def scan(
         raise RuntimeError("Reverse must be a bool, but got " + str(type(reverse)))
 
     # TODO: Support closures/nn_modules in order to be able represent RNNs with scan
-    # TODO: Support _inductor lowering
     # TODO: Support Autograd
     # TODO: Unify handling of pytrees for control flow ops, such as cond, while_loop, etc.
     # TODO: Unify the list inputs of control flow ops to tuple.
