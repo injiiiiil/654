@@ -290,6 +290,17 @@ public:
     }
     return false;
   }
+#if defined(_WIN32) && defined(__aarch64__)
+  Vectorized<T> map(T (*const f)(T)) const {
+    Vectorized<T> ret;
+    for (int64_t i = 0; i < size(); i++) {
+      ret[i] = f(values[i]);
+      if (++i < size())
+        ret[i] = f(values[i]);
+    }
+    return ret;
+  }
+#else
   Vectorized<T> map(T (*const f)(T)) const {
     Vectorized<T> ret;
     for (int64_t i = 0; i != size(); i++) {
@@ -297,6 +308,7 @@ public:
     }
     return ret;
   }
+#endif
   Vectorized<T> map(T (*const f)(const T &)) const {
     Vectorized<T> ret;
     for (int64_t i = 0; i != size(); i++) {
