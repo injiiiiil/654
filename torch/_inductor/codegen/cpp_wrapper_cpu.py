@@ -2385,9 +2385,7 @@ if (py_{buf_name}.get() == NULL) {{
         elif isinstance(type_, torch.NumberType):
             if isinstance(val, bool):
                 return "int32_t"
-            elif isinstance(val, int):
-                return "int64_t"
-            elif isinstance(val, float):
+            elif isinstance(val, (int, float)):
                 return "double"
             elif val is None:
                 # This could happen when val is an optional value
