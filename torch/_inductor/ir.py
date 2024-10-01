@@ -77,6 +77,7 @@ from .runtime.benchmarking import benchmarker
 from .runtime.hints import ReductionHint
 from .utils import (
     argsort,
+    argsort_symint,
     cache_on_self,
     ceildiv,
     convert_shape_to_inductor,
@@ -249,7 +250,11 @@ def get_stride_order(seq: Sequence[Union[int, torch.SymInt, Expr]]) -> Sequence[
     """
     Convert strides to stride order
     """
-    sorted_idx: List[int] = argsort(seq)
+    seq_lst = list(seq)
+    if all(isinstance(elt, (int, torch.SymInt)) for elt in seq_lst):
+        sorted_idx = argsort_symint(seq_lst)
+    else:
+        sorted_idx = argsort(seq_lst)
     out = [0 for _ in range(len(seq))]
     for i, elem in enumerate(sorted_idx):
         out[elem] = i
@@ -2963,10 +2968,13 @@ class Layout(IRNode):
         # reorder the stride given order
         stride_ordered = [-1] * len(order)
         for i in range(len(order)):
-            stride_ordered[order[i]] = V.graph.sizevars.size_hint(stride[i])
+            stride_ordered[order[i]] = stride[i]
         # check if it is in ascending order
         for i in range(len(order) - 1):
-            if stride_ordered[i] > stride_ordered[i + 1]:
+            cond = torch._inductor.sizevars.evaluate_expr(
+                V.graph._shape_env, stride_ordered[i] > stride_ordered[i + 1]
+            )
+            if cond:
                 return False
         return True
 
