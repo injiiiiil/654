@@ -15,7 +15,7 @@ import torch._dynamo.testing
 import torch.distributed._composable.fsdp._fsdp_param
 import torch.nn.functional as F
 from torch import nn
-from torch._dynamo import compiled_autograd
+from torch._dynamo.utils import counters
 from torch._inductor import comms
 from torch._inductor.utils import is_fallback_op, run_and_get_code
 from torch.distributed._composable.fsdp import fully_shard
@@ -407,18 +407,14 @@ val.shape: {[node.meta['val'].shape for node in aliased_graph_inputs]},
         backend,
         fullgraph,
     ):
-        def compiler_fn(compiled_autograd_backend):
-            def _fn(gm):
-                # fullgraph=True because graph-break in Compiled Autograd BWD graph is not supported by Traceable FSDP2 yet
-                # (main difficulty comes from queue_callback not working well when BWD has graph break).
-                return torch.compile(
-                    gm, backend=compiled_autograd_backend, fullgraph=True
-                )
-
-            return _fn
+        def fwd_bwd(model, inp):
+            out = model(inp)
+            loss = out.sum()
+            loss.backward()
+            return loss
 
         def run_iters(
-            model,
+            fwd_bwd_func,
             optim,
             n_iter=10,
             compiled_autograd_backend=None,
@@ -427,55 +423,58 @@ val.shape: {[node.meta['val'].shape for node in aliased_graph_inputs]},
             losses = []
             for i in range(n_iter):
                 inp = input_creation_fn()
-                if compiled_autograd_backend is not None:
-                    maybe_compiled_autograd_ctx = compiled_autograd.enable(
-                        compiler_fn(compiled_autograd_backend)
-                    )
-                else:
-                    maybe_compiled_autograd_ctx = contextlib.nullcontext()
-                with maybe_compiled_autograd_ctx:
-                    out = model(inp)
-                    loss = out.sum()
-                    losses.append(loss.item())
-                    loss.backward()
+                loss = fwd_bwd_func(inp)
+                losses.append(loss.item())
                 optim.step()
                 optim.zero_grad(set_to_none=True)
             return losses
 
         def test_compiled():
             model, optim = model_init_fn()
+            fwd_bwd_fn = functools.partial(fwd_bwd, model)
             # FSDP2 does lazy init using 1st run, so run it once to init using eager mode
-            run_iters(model, optim, n_iter=1)
+            run_iters(fwd_bwd_fn, optim, n_iter=1)
 
+            counters.clear()
             with self._remove_fsdp2_unsharded_param_graph_input_usage_with_optional_checks(
                 model, fullgraph
             ):
-                model_compiled = torch.compile(
-                    model, backend=backend, fullgraph=fullgraph
+                fwd_bwd_fn_compiled = torch.compile(
+                    # NOTE: we can't set `fullgraph=True` here because we will always graph-break
+                    # on `loss.backward()` call in `fwd_bwd()`. This is okay as long as
+                    # it's the only graph-break in forward pass.
+                    fwd_bwd_fn,
+                    backend=backend,
+                    fullgraph=False,
                 )
                 res = run_iters(
-                    model_compiled,
+                    fwd_bwd_fn_compiled,
                     optim,
                     compiled_autograd_backend=backend,
                 )
+                if fullgraph:
+                    self.assertEqual(len(counters["graph_break"]), 1)
+                    self.assertIn("Tensor.backward", counters["graph_break"])
+                else:
+                    self.assertGreater(len(counters["graph_break"]), 1)
                 return res
 
         def test_eager():
             model, optim = model_init_fn()
+            fwd_bwd_fn = functools.partial(fwd_bwd, model)
             # FSDP2 does lazy init using 1st run, so run it once to init using eager mode
-            run_iters(model, optim, n_iter=1)
+            run_iters(fwd_bwd_fn, optim, n_iter=1)
 
-            res = run_iters(model, optim)
+            res = run_iters(fwd_bwd_fn, optim)
             return res
 
         torch._dynamo.reset()
         torch._dynamo.compiled_autograd.reset()
         with torch._dynamo.config.patch(
-            # NOTE: Setting fullgraph=False for forward (to allow graph-breaks) is a common scenario
-            # and in that case we need a standalone Compiled Autograd ctx that has fullgraph=True for backward.
-            # Hence here we explicitly set compiled_autograd=False and use the standalone Compiled Autograd ctx
-            # `maybe_compiled_autograd_ctx` created in `run_iters()`.
-            compiled_autograd=False,
+            compiled_autograd=True,
+            compiled_autograd_config_override={
+                "fullgraph": True,
+            },
             inline_inbuilt_nn_modules=True,
             skip_fsdp_hooks=False,
         ), torch._functorch.config.patch(
