@@ -3257,6 +3257,19 @@ class CPUReproTests(TestCase):
         self.assertTrue("in_out_ptr" in code)
         self.assertEqual(fn_opt(*inps), fn(*inps))
 
+    @config.patch(inplace_buffers=True)
+    def test_layer_norm_should_not_inplace(self):
+        # https://github.com/pytorch/pytorch/issues/120217
+        D = 16
+        def fn(x):
+            return nn.LayerNorm([D], dtype=torch.float16, device="cuda")(x)
+
+        inps = [torch.rand(D, dtype=torch.float16, device="cuda")]
+        fn_opt = torch.compile(fn)
+        _, code = run_and_get_cpp_code(fn_opt, *inps)
+        self.assertTrue("in_out_ptr" not in code)
+        self.assertEqual(fn_opt(*inps), fn(*inps))
+
     def test_eliminate_meaningless_copy(self):
         def fn(x1, x2):
             permute = torch.ops.aten.permute.default(x2, [0, 2, 1, 3])
