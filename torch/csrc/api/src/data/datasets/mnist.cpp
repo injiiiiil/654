@@ -9,9 +9,7 @@
 #include <fstream>
 #include <string>
 
-namespace torch {
-namespace data {
-namespace datasets {
+namespace torch::data::datasets {
 namespace {
 constexpr uint32_t kTrainSize = 60000;
 constexpr uint32_t kTestSize = 10000;
@@ -121,6 +119,4 @@ const Tensor& MNIST::targets() const {
   return targets_;
 }
 
-} // namespace datasets
-} // namespace data
-} // namespace torch
+} // namespace torch::data::datasets

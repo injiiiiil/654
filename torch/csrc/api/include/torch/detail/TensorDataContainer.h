@@ -16,9 +16,7 @@
 
 #include <initializer_list>
 
-namespace torch {
-
-namespace detail {
+namespace torch::detail {
 
 enum class TensorDataContainerType { Scalar, InitList, Tensor };
 
@@ -157,7 +155,7 @@ struct TensorDataContainer {
           elem.scalar_type());
     }
     sizes_.reserve(first_elem.sizes().size() + 1);
-    sizes_.push_back(init_list.size());
+    sizes_.push_back(static_cast<int64_t>(init_list.size()));
     sizes_.insert(
         sizes_.end(), first_elem.sizes().begin(), first_elem.sizes().end());
   }
@@ -328,7 +326,7 @@ struct TensorDataContainer {
           " in its first dimension, but got Tensor with size ",
           tensor.sizes()[0],
           " in its first dimension");
-      size_t index = 0;
+      int64_t index = 0;
       for (const auto& elem : init_list_) {
         at::Tensor slice = tensor[index];
         elem.fill_tensor(slice);
@@ -358,6 +356,4 @@ inline std::ostream& operator<<(
   return stream;
 }
 
-} // namespace detail
-
-} // namespace torch
+} // namespace torch::detail
